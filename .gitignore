@@ -1,0 +1,27 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# InsightFace downloaded model cache
+.insightface/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local test image (may contain a person's face)
+/img1.jpg
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

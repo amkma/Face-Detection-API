@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clear Face Detection</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --success-bg: rgba(16, 185, 129, 0.15);
+      --danger: #ef4444;
+      --danger-bg: rgba(239, 68, 68, 0.15);
+      --warning: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      max-width: 720px;
+      margin: 2rem auto;
+      padding: 0 1.25rem 3rem;
+      line-height: 1.5;
+    }
+    h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; }
+    p.subtitle { color: var(--muted); font-size: 0.95rem; margin-bottom: 1.5rem; }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      background: var(--card);
+      padding: 1rem;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+    input[type="file"] {
+      color: var(--muted);
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+    button {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 0.6rem 1.2rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: var(--primary-hover); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .media-container {
+      position: relative;
+      margin-bottom: 1.5rem;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: #000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 280px;
+    }
+    video, img.preview {
+      width: 100%;
+      max-height: 480px;
+      object-fit: contain;
+      display: block;
+    }
+    .placeholder {
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: center;
+      padding: 2rem;
+    }
+    /* Status banner */
+    .status-banner {
+      padding: 1.2rem;
+      border-radius: 12px;
+      margin-bottom: 1.5rem;
+      font-weight: 600;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .status-banner.passed {
+      background: var(--success-bg);
+      border: 1px solid var(--success);
+      color: #34d399;
+    }
+    .status-banner.failed {
+      background: var(--danger-bg);
+      border: 1px solid var(--danger);
+      color: #f87171;
+    }
+    .status-title { font-size: 1.15rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; }
+    .status-desc { font-size: 0.9rem; font-weight: 400; opacity: 0.95; }
+    /* Grid checks */
+    .checks-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .check-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.9rem 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .check-card .label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .check-card .value { font-size: 0.95rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem; }
+    .check-card .detail { font-size: 0.8rem; color: var(--muted); }
+    .badge-ok { color: var(--success); }
+    .badge-bad { color: var(--danger); }
+    /* Issues list */
+    .issues-card {
+      background: var(--danger-bg);
+      border: 1px solid var(--danger);
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      margin-bottom: 1.5rem;
+    }
+    .issues-card h3 { font-size: 0.95rem; color: #f87171; margin-bottom: 0.5rem; }
+    .issues-card ul { padding-left: 1.2rem; color: #fca5a5; font-size: 0.9rem; }
+    .issues-card li { margin-bottom: 0.25rem; }
+    /* Raw JSON toggle */
+    details {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.5rem 1rem;
+      font-size: 0.85rem;
+    }
+    summary { cursor: pointer; color: var(--muted); font-weight: 600; padding: 0.25rem 0; }
+    pre {
+      margin-top: 0.5rem;
+      background: #090d16;
+      padding: 0.75rem;
+      border-radius: 6px;
+      overflow: auto;
+      font-family: monospace;
+      color: #e2e8f0;
+      max-height: 250px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Clear Face Detection</h1>
+  <p class="subtitle">Passes only when exactly one clear, uncovered face is detected with both eyes open. Blurry, covered, too small, dark, or overexposed faces are rejected.</p>
+
+  <div class="controls">
+    <input type="file" id="file" accept="image/*" capture="user" />
+    <button type="button" id="btnFile">Check image</button>
+    <button type="button" id="btnCam">Use webcam</button>
+  </div>
+
+  <div class="media-container">
+    <div id="placeholder" class="placeholder">Select an image or launch the webcam to test</div>
+    <video id="video" autoplay playsinline style="display:none;"></video>
+    <canvas id="canvas" style="display:none;"></canvas>
+    <img id="preview" class="preview" alt="Preview" style="display:none;" />
+  </div>
+
+  <div id="resultsArea" style="display:none;">
+    <div id="statusBanner" class="status-banner"></div>
+    <div id="issuesCard" class="issues-card" style="display:none;"></div>
+    <div class="checks-grid" id="checksGrid"></div>
+  </div>
+
+  <details id="rawDetails" style="display:none;">
+    <summary>Inspect raw JSON response</summary>
+    <pre id="out"></pre>
+  </details>
+
+  <script>
+    const fileInput = document.getElementById("file");
+    const preview = document.getElementById("preview");
+    const placeholder = document.getElementById("placeholder");
+    const out = document.getElementById("out");
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const resultsArea = document.getElementById("resultsArea");
+    const statusBanner = document.getElementById("statusBanner");
+    const issuesCard = document.getElementById("issuesCard");
+    const checksGrid = document.getElementById("checksGrid");
+    const rawDetails = document.getElementById("rawDetails");
+    const btnFile = document.getElementById("btnFile");
+    const btnCam = document.getElementById("btnCam");
+
+    function setLoading(isLoading) {
+      btnFile.disabled = isLoading;
+      btnCam.disabled = isLoading;
+      if (isLoading) {
+        resultsArea.style.display = "block";
+        statusBanner.className = "status-banner";
+        statusBanner.style.background = "var(--card)";
+        statusBanner.style.border = "1px solid var(--border)";
+        statusBanner.style.color = "var(--text)";
+        statusBanner.innerHTML = '<div class="status-title">⏳ Detecting face and checking clarity…</div>';
+        issuesCard.style.display = "none";
+        checksGrid.innerHTML = "";
+        rawDetails.style.display = "none";
+      }
+    }
+
+    async function verify(blob) {
+      setLoading(true);
+      try {
+        const form = new FormData();
+        form.append("image", blob, "capture.jpg");
+        const res = await fetch("/api/verify", { method: "POST", body: form });
+        const data = await res.json();
+        renderResults(data);
+      } catch (err) {
+        renderError("Request failed: " + err.message);
+      } finally {
+        btnFile.disabled = false;
+        btnCam.disabled = false;
+      }
+    }
+
+    function renderError(msg) {
+      resultsArea.style.display = "block";
+      statusBanner.className = "status-banner failed";
+      statusBanner.innerHTML = `
+        <div class="status-title">❌ Verification Error</div>
+        <div class="status-desc">${msg}</div>
+      `;
+      issuesCard.style.display = "none";
+      checksGrid.innerHTML = "";
+    }
+
+    function renderResults(data) {
+      resultsArea.style.display = "block";
+      rawDetails.style.display = "block";
+      out.textContent = JSON.stringify(data, null, 2);
+
+      if (data.error) {
+        renderError(data.error);
+        return;
+      }
+
+      const passed = Boolean(data.acceptable_for_enrollment);
+      const q = data.quality || {};
+
+      // Status banner
+      statusBanner.style.background = "";
+      statusBanner.style.border = "";
+      statusBanner.className = "status-banner " + (passed ? "passed" : "failed");
+      statusBanner.innerHTML = `
+        <div class="status-title">
+          ${passed ? "✔️ Passed — Clear Face Detected" : "❌ Rejected — Face Not Clear"}
+        </div>
+        <div class="status-desc">${data.message || (passed ? "One clear face detected." : "No clear face detected.")}</div>
+      `;
+
+      // Issues card
+      const issues = q.issues || [];
+      if (issues.length > 0) {
+        issuesCard.style.display = "block";
+        issuesCard.innerHTML = `
+          <h3>Issues to resolve (${issues.length}):</h3>
+          <ul>${issues.map(it => `<li>${it}</li>`).join("")}</ul>
+        `;
+      } else {
+        issuesCard.style.display = "none";
+      }
+
+      // Individual checklist cards
+      const faceDetected = Boolean(data.face_detected);
+      const blurOk = q.blur_variance >= 50;
+      const fullFaceVisible = Boolean(q.full_face_visible) && q.visible_eye_count >= 2 && Boolean(q.mouth_visible);
+      const eyesOpen = q.open_eye_count >= 2;
+
+      checksGrid.innerHTML = `
+        <div class="check-card">
+          <span class="label">Face Detection</span>
+          <span class="value ${faceDetected && data.face_count === 1 ? "badge-ok" : "badge-bad"}">
+            ${faceDetected ? (data.face_count === 1 ? "✔️ 1 Face Detected" : `❌ ${data.face_count} Faces`) : "❌ No Face"}
+          </span>
+          <span class="detail">SCRFD score: ${q.detection_confidence ? (q.detection_confidence * 100).toFixed(0) + "%" : "N/A"}</span>
+        </div>
+
+        <div class="check-card">
+          <span class="label">Face Visibility</span>
+          <span class="value ${fullFaceVisible ? "badge-ok" : "badge-bad"}">
+            ${fullFaceVisible ? "✔️ Full Face Visible" : "❌ Face Partly Covered"}
+          </span>
+          <span class="detail">Eyes visible: ${q.visible_eye_count ?? 0}/2 · lower face: ${q.mouth_visible ? "visible" : "covered"}</span>
+        </div>
+
+        <div class="check-card">
+          <span class="label">Eye State</span>
+          <span class="value ${eyesOpen ? "badge-ok" : "badge-bad"}">
+            ${eyesOpen ? "✔️ Both Eyes Open" : "❌ Keep Both Eyes Open"}
+          </span>
+          <span class="detail">${q.open_eye_count ?? 0} of 2 eyes classified open</span>
+        </div>
+
+        <div class="check-card">
+          <span class="label">Image Sharpness</span>
+          <span class="value ${blurOk ? "badge-ok" : "badge-bad"}">
+            ${blurOk ? "✔️ Sharp" : "❌ Blurry"}
+          </span>
+          <span class="detail">Variance: ${q.blur_variance ?? "N/A"}</span>
+        </div>
+
+        <div class="check-card">
+          <span class="label">Lighting</span>
+          <span class="value ${q.brightness >= 35 && q.brightness <= 225 ? "badge-ok" : "badge-bad"}">
+            ${q.brightness >= 35 && q.brightness <= 225 ? "✔️ Well Lit" : "❌ Poor Lighting"}
+          </span>
+          <span class="detail">Brightness: ${q.brightness ?? "N/A"}/255</span>
+        </div>
+      `;
+    }
+
+    btnFile.onclick = async () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) { alert("Choose an image first"); return; }
+      preview.src = URL.createObjectURL(f);
+      preview.style.display = "block";
+      placeholder.style.display = "none";
+      video.style.display = "none";
+      await verify(f);
+    };
+
+    btnCam.onclick = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        video.srcObject = stream;
+        video.style.display = "block";
+        placeholder.style.display = "none";
+        preview.style.display = "none";
+        await video.play();
+        // Allow camera sensor auto-exposure and focus to settle
+        await new Promise(r => setTimeout(r, 1000));
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d").drawImage(video, 0, 0);
+        stream.getTracks().forEach(t => t.stop());
+        video.style.display = "none";
+        const blob = await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.95));
+        preview.src = canvas.toDataURL("image/jpeg");
+        preview.style.display = "block";
+        await verify(blob);
+      } catch (e) {
+        alert("Webcam error: " + e.message);
+      }
+    };
+
+    fileInput.onchange = () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (f) {
+        preview.src = URL.createObjectURL(f);
+        preview.style.display = "block";
+        placeholder.style.display = "none";
+      }
+    };
+  </script>
+</body>
+</html>
