@@ -17,7 +17,7 @@ if (-not (Test-Path ".\.venv\Scripts\python.exe")) {
     }
 }
 
-& ".\.venv\Scripts\python.exe" -c "import importlib.metadata as m; import fastapi, uvicorn, insightface, onnxruntime; assert m.version('insightface') == '2.1'" 2>$null
+& ".\.venv\Scripts\python.exe" -c "import fastapi, uvicorn, cv2, numpy, PIL" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Installing required Python packages. This can take several minutes..." -ForegroundColor Yellow
     & ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
@@ -29,8 +29,8 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Starting Clear Face Detection Server..." -ForegroundColor Cyan
 Write-Host "Directory: $(Get-Location)" -ForegroundColor Gray
-Write-Host "JSON API: POST http://127.0.0.1:8000/api/verify" -ForegroundColor Gray
-& ".\.venv\Scripts\python.exe" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+Write-Host "JSON API: POST http://127.0.0.1:8011/api/verify" -ForegroundColor Gray
+& ".\.venv\Scripts\python.exe" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8011
 if ($LASTEXITCODE -ne 0) {
     Write-Error "The service stopped with an error. Review the messages above."
     exit $LASTEXITCODE

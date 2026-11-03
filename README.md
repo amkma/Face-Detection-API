@@ -33,8 +33,22 @@ python -m pip install -r requirements.txt
 python -m app.fetch_models
 ```
 
-On Windows, the same three lines with `.\.venv\Scripts\activate`, or use
-`start.bat` / `start.ps1`, which create `.venv` and install when needed.
+On Windows (PowerShell):
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m app.fetch_models
+```
+
+In cmd.exe the activate line is `.\.venv\Scripts\activate.bat`; the rest is
+identical. If `py` is not on PATH, use `python` and check with `python -V`
+that it is 3.10 or newer.
+
+`start.bat` and `start.ps1` do all of the above on first run and then start
+the server, which is the shortest path if you only want to look at it.
 
 ## Run
 
@@ -99,15 +113,41 @@ before measuring, so `MIN_BLUR_VARIANCE = 50` means the same thing at any input 
 
 ## Tests
 
-```sh
-python -m pip install pytest
+On Windows (PowerShell):
+
+```powershell
 python -m pytest tests -q
 ```
 
-The suite runs the real detector on a fixture in `tests/assets/`, and pins the
-choices that were expensive to learn: absolute-pixel landmarks inside a box
-that does not start at the origin, sharpness invariant across input sizes, and
-a rejection that always explains itself.
+On macOS or Linux:
+
+```sh
+python -m pytest tests -q
+```
+
+pytest ships in `requirements.txt`, so the install above is enough.
+
+Expected: 22 tests, 19 pass, 3 fail in `test_align.py`:
+
+- `test_projected_landmarks_are_closer_than_insightface` compares a float64
+  fit with `target_template()` against `face_align.estimate_norm`, which
+  returns **float32**. On these five points the float64 fit is the smaller
+  minimax solution (2.283 px) and the reference the larger (2.286 px), so the
+  test measures rounding, not geometry. It only ever passed on a float32 fit.
+- `test_similarity_matrix_keeps_scale` pins the scale drawn from that float32
+  matrix, so it moves in the sixth digit for the same reason.
+- `test_square_crop_keeps_true_origin_inside` expects the crop origin to be
+  `(37, 51)`; the padding in `square_crop` gives `(31, 31)`. **Unchecked:** I
+  have not established which is right, so it is left red rather than bent.
+
+The other 19 pass, including the detector and API-contract suites and the
+sharpness-invariant-across-sizes tests. If `insightface` or `scikit-image`
+is not installed, the reference-comparison tests skip by design; neither is
+a dependency of the app.
+
+Windows will ask for a firewall exception the first time. Allow it for
+private networks only; the server binds to 127.0.0.1, so nothing on the LAN
+needs it.
 
 ## Licence
 

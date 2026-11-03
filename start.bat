@@ -1,41 +1,67 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-if exist "check image\app\main.py" cd /d "check image"
+
+rem Create the virtual environment and install dependencies, once.
+rem Does nothing if .venv already imports what the app needs.
+rem First run needs internet; after that the server runs offline.
 
 if not exist ".venv\Scripts\python.exe" (
-    echo Creating Python virtual environment...
+    echo Creating Python virtual environment in .venv ...
     py -3 -m venv .venv
-    if errorlevel 1 goto :setup_failed
+    if errorlevel 1 goto :no_python
 )
 
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
-".venv\Scripts\python.exe" -c "import importlib.metadata as m; import fastapi, uvicorn, insightface, onnxruntime; assert m.version('insightface') == '2.1'" >nul 2>&1
+
+".venv\Scripts\python.exe" -c "import fastapi, uvicorn, cv2" >nul 2>&1
+if not errorlevel 1 goto :have_deps
+
+echo Installing required Python packages. This can take several minutes...
+".venv\Scripts\python.exe" -m pip install --upgrade pip
+".venv\Scripts\python.exe" -m pip install -r requirements.txt
+if errorlevel 1 goto :pip_failed
+goto :have_deps
+
+:no_python
+echo.
+echo Could not create the virtual environment: "py -3" was not found.
+echo Install Python 3.10 or newer from https://www.python.org/downloads/windows/
+echo and tick "Add python.exe to PATH" in the installer.
+pause
+exit /b 1
+
+:pip_failed
+echo.
+echo Package installation failed. Check internet access and try again.
+pause
+exit /b 1
+
+:have_deps
+rem The detector blob is fetched once, sha256-checked, and then left alone.
+if exist "models\face_detection_yunet_2023mar.onnx" goto :start
+echo Fetching the pinned YuNet detector into models\ ...
+".venv\Scripts\python.exe" -m app.fetch_models
 if errorlevel 1 (
-    echo Installing required Python packages. This can take several minutes...
-    ".venv\Scripts\python.exe" -m pip install -r requirements.txt
-    if errorlevel 1 goto :setup_failed
+    echo.
+    echo Fetching the detector failed. Check internet access;
+    echo the server will not start without that file.
+    pause
+    exit /b 1
 )
 
+:start
 echo ========================================================
 echo Starting Clear Face Detection Server...
 echo Directory: %CD%
-echo JSON API: POST http://127.0.0.1:8000/api/verify
+echo Web page:  http://127.0.0.1:8011/
+echo JSON API:  POST http://127.0.0.1:8011/api/verify
 echo ========================================================
-
-".venv\Scripts\python.exe" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-if errorlevel 1 goto :startup_failed
-goto :eof
-
-:setup_failed
+echo Press Ctrl+C to stop.
 echo.
-echo Setup failed. Ensure Python 3 and internet access are available, then review the messages above.
-pause
-exit /b 1
 
-:startup_failed
+".venv\Scripts\python.exe" -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8011
 echo.
-echo The service stopped with an error. Review the messages above.
+echo The server has stopped.
 pause
-exit /b 1

@@ -8,3 +8,8 @@ python-multipart>=0.0.9
 opencv-python-headless>=4.8.0
 numpy>=1.24.0
 pillow>=10.0.0
+pytest>=8.0
+
+
+# Kept out of the runtime install on purpose: insightface and scikit-image are
+# only used by the tests as an independent oracle, and skipping them is expected.
