@@ -219,7 +219,14 @@
       return comma === -1 ? dataUrl : dataUrl.slice(comma + 1);
     }
 
+    function removeDataUrl(dataUrl) {
+      if (dataUrl && dataUrl.slice(0, 5) === "blob:") {
+        URL.revokeObjectURL(dataUrl);
+      }
+    }
+
     function showImage(dataUrl) {
+      removeDataUrl(preview.src);
       preview.src = dataUrl;
       preview.style.display = "block";
       boxStage.style.display = "block";
@@ -509,30 +516,104 @@
       if (text) { fileInput.title = "Camera: " + text; }
     })();
 
-    btnCam.onclick = async () => {
-      var stream = null;
+    // Live camera: one stream, a frame posted every CAM_POLL_MS.
+    // The old flow opened a stream per click and closed it before the result
+    // arrived. A poll reuses the open stream and only serialises overlapping
+    // requests, so a mouse-click burst cannot stack token requests on the sensor.
+    var CAM_POLL_MS = 900;
+    var camStream = null;
+    var camTimer = 0;
+    var camBusy = false;
+    var camWarm = {};
+    var lastDataUrl = "";
+
+    function stopCam() {
+      if (camTimer) { clearTimeout(camTimer); }
+      camTimer = 0;
+      if (camStream) { camStream.getTracks().forEach(function (t) { t.stop(); }); }
+      camStream = null;
+      video.pause();
+      video.srcObject = null;
+      video.style.display = "none";
+      btnCam.textContent = "Use webcam";
+    }
+
+    async function frameOf(video, canvas) {
+      var w = video.videoWidth;
+      var h = video.videoHeight;
+      if (!w || !h) {
+        throw new Error("The camera has not produced a frame yet.");
+      }
+      var small = document.createElement("canvas");
+      small.width = 48;
+      small.height = 48;
+      small.getContext("2d").drawImage(video, 0, 0, 48, 48);
+      var px = small.getContext("2d").getImageData(0, 0, 48, 48).data;
+      var sum = 0;
+      for (var i = 0; i < px.length; i += 4) {
+        sum += px[i] + px[i + 1] + px[i + 2];
+      }
+      var mean = sum / (px.length / 4) / 3;
+      if (!camWarm.ink && mean <= 6) { return null; }
+
+      var side = 1280;
+      var big = Math.max(w, h);
+      if (big < side) { side = big; }
+      canvas.width = Math.round(w * side / big);
+      canvas.height = Math.round(h * side / big);
+      var ctx = canvas.getContext("2d");
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      camWarm.ink = true;
+      return canvas.toDataURL("image/jpeg", 0.95);
+    }
+
+    async function sendFrame() {
+      var dataUrl = null;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }
+        dataUrl = await frameOf(video, canvas);
+      } finally {
+        camBusy = false;
+      }
+      if (!dataUrl || dataUrl === lastDataUrl) { return; }
+      lastDataUrl = dataUrl;
+      await verify({ camera: true }, dataUrl);
+    }
+
+    function pollTick() {
+      if (!camStream) { return; }
+      if (!camBusy) {
+        camBusy = true;
+        sendFrame()
+          .catch(function () { camBusy = false; })
+          .finally(function () { camBusy = false; });
+      }
+      camTimer = setTimeout(pollTick, CAM_POLL_MS);
+    }
+
+    btnCam.onclick = async () => {
+      if (camStream) {
+        stopCam();
+        showImage(lastDataUrl);
+        return;
+      }
+      try {
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
         });
-        video.srcObject = stream;
-        canvas.style.display = "block";
+        video.srcObject = camStream;
         video.style.display = "block";
-        placeholder.textContent = "Starting the camera…";
-        await video.play();
-        var warmed = {};
-        var frame = await pickFrame(video, canvas, warmed);
-        var shotBlob = await (await fetch(frame.dataUrl)).blob();
-        stream.getTracks().forEach(function (t) { t.stop(); });
-        stream = null;
-        video.pause();
-        video.srcObject = null;
-        video.style.display = "none";
         canvas.style.display = "none";
-        placeholder.style.display = "none";
-        await verify(shotBlob, frame.dataUrl, { quality: 0.95, width: frame.w });
+        placeholder.textContent = "Live camera";
+        btnCam.textContent = "Stop camera";
+        await video.play();
+        lastDataUrl = "";
+        pollTick();
       } catch (e) {
-        if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); }
+        camStream = null;
+        btnCam.textContent = "Use webcam";
         video.style.display = "none";
         canvas.style.display = "none";
         renderError("Webcam: " + messageOf(e));

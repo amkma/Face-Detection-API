@@ -1,35 +1,21 @@
-// Draws what the detector found on top of the preview image.
-// The canvas sits in normal flow inside #boxStage, so it tracks the picture
-// when the window is resized instead of being placed by offset arithmetic.
 (function () {
-  var NAMES = ["eye L", "eye R", "mid", "mouth L", "mouth R"];
+  "use strict";
+
   var COLOR_OK = "#1fbf75";
   var COLOR_BAD = "#e5484d";
+  var DOT = "#ffd400";
+  var DOT_EDGE = "rgba(0,0,0,0.6)";
+  var NAMES = ["eye L", "eye R", "mid", "mouth L", "mouth R"];
 
-  function report(text) {
-    var legend = document.getElementById("boxLegend");
-    if (legend) {
-      legend.textContent = text;
-    }
-  }
-
-  function clear() {
-    var cv = document.getElementById("boxCanvas");
-    if (!cv) { return; }
-    cv.width = 0;
-    cv.height = 0;
-    cv.style.width = "0px";
-    cv.style.height = "0px";
-    report("");
-  }
-
-  function failedNames(data) {
-    if (data && data.failed_checks) {
-      return data.failed_checks;
-    }
+  function failedNames(d) {
+    if (!d) { return []; }
+    if (Array.isArray(d.failed_checks)) { return d.failed_checks; }
+    if (d.failed_checks && Array.isArray(d.failed_checks.names)) { return d.failed_checks.names; }
+    if (Array.isArray(d.failed)) { return d.failed; }
     return [];
   }
 
+  // A response may describe one face at the top level or a list of faces.
   function facesOf(d) {
     var list = [];
     if (!d) { return list; }
@@ -41,6 +27,30 @@
     return list;
   }
 
+  // Accept [[x, y], ...] and [{x, y} | {x, "y": ...}, ...] alike.
+  function pointsOf(face) {
+    var raw = face.landmarks;
+    if (!raw && face.kps) { raw = face.kps; }
+    if (!Array.isArray(raw)) { return []; }
+    var out = [];
+    raw.forEach(function (pt) {
+      if (!pt) { return; }
+      var x = Array.isArray(pt) ? pt[0] : pt.x;
+      var y = Array.isArray(pt) ? pt[1] : pt.y;
+      x = Number(x);
+      y = Number(y);
+      if (!isFinite(x) || !isFinite(y)) { return; }
+      out.push([x, y]);
+    });
+    return out;
+  }
+
+  function report(text) {
+    var legend = document.getElementById("boxLegend");
+    if (!legend) { return; }
+    legend.textContent = String(text);
+  }
+
   function paint(data) {
     var cv = document.getElementById("boxCanvas");
     var stage = document.getElementById("boxStage");
@@ -48,27 +58,37 @@
     if (!cv) { return; }
     if (!stage) { return; }
     if (!shown) { return; }
-    if (!shown.clientWidth) { return; }
 
     var faces = facesOf(data);
-    if (data && data.face_detected === false) {
+    stage.style.display = "block";
+
+    // A cleared or rejected frame must wipe the old drawing: leaving the last
+    // verdict's box up mislabels the picture that is on screen now.
+    function blank(text) {
       cv.width = 0;
       cv.height = 0;
       cv.style.width = "0px";
       cv.style.height = "0px";
-      report("No box: the detector found no face in this image.");
+      if (text) { report(text); }
+    }
+
+    if (data && data.face_detected === false) {
+      blank("No box: the detector found no face in this image.");
       return;
     }
-    if (!faces.length) { return; }
+    if (!faces.length) {
+      blank("");
+      return;
+    }
 
     var nat = shown.naturalWidth;
-    if (!nat) { return; }
+    if (!nat || !shown.clientWidth) { return; }
 
     // Read where the image actually landed instead of assuming its displayed
     // width equals its natural width; a stretched picture would offset the box.
-    var box = shown.getBoundingClientRect();
-    var w = box.width;
-    var h = box.height;
+    var rect = shown.getBoundingClientRect();
+    var w = rect.width;
+    var h = rect.height;
     var k = w / nat;
 
     var dpr = window.devicePixelRatio || 1;
@@ -86,39 +106,77 @@
     var stroke = ok ? COLOR_OK : COLOR_BAD;
     var fill = ok ? "rgba(31,191,117,0.12)" : "rgba(229,72,77,0.12)";
     var font = Math.max(11, Math.round(w / 42));
+    var dots = 0;
 
     faces.forEach(function (face) {
       var a = face.facial_area;
-      if (!a) { return; }
-      var x = a.x * k;
-      var y = a.y * k;
-      var bw = a.width * k;
-      var bh = a.height * k;
+      if (a) {
+        var x = a.x * k;
+        var y = a.y * k;
+        var bw = a.width * k;
+        var bh = a.height * k;
 
-      ctx.lineWidth = Math.max(2, Math.round(w / 220));
-      ctx.strokeStyle = stroke;
-      ctx.fillStyle = fill;
-      ctx.fillRect(x, y, bw, bh);
-      ctx.strokeRect(x, y, bw, bh);
+        ctx.lineWidth = Math.max(2, Math.round(w / 220));
+        ctx.strokeStyle = stroke;
+        ctx.fillStyle = fill;
+        ctx.fillRect(x, y, bw, bh);
+        ctx.strokeRect(x, y, bw, bh);
 
-      var label = Math.round(a.width) + "x" + Math.round(a.height);
-      ctx.font = "600 " + font + "px ui-sans-serif, system-ui, sans-serif";
-      var tw = ctx.measureText(label).width + 10;
-      var th = Math.max(16, Math.round(w / 34));
-      var ly = (y - th > 0) ? (y - th) : y;
-      ctx.fillStyle = stroke;
-      ctx.fillRect(x, ly, tw, th);
-      ctx.fillStyle = "#fff";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, x + 5, ly + th / 2);
+        var label = Math.round(a.width) + "x" + Math.round(a.height);
+        ctx.font = "600 " + font + "px ui-sans-serif, system-ui, sans-serif";
+        var tw = ctx.measureText(label).width + 10;
+        var th = Math.max(16, Math.round(w / 34));
+        var ly = (y - th > 0) ? (y - th) : y;
+        ctx.fillStyle = stroke;
+        ctx.fillRect(x, ly, tw, th);
+        ctx.fillStyle = "#fff";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, x + 5, ly + th / 2);
+      }
+
+      var pts = pointsOf(face);
+      dots += pts.length;
+      var radius = Math.max(2.5, w / 160);
+      pts.forEach(function (pt, index) {
+        var px = pt[0] * k;
+        var py = pt[1] * k;
+
+        ctx.beginPath();
+        ctx.arc(px, py, radius, 0, Math.PI * 2);
+        ctx.fillStyle = DOT;
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = DOT_EDGE;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(px, py, radius / 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = "#111";
+        ctx.fill();
+
+        // Small dots on a big face: every point labelled hides the features it
+        // is marking, so skip the name when a label would land on another dot.
+        var crowded = pts.some(function (other) {
+          if (other === pt) { return false; }
+          var gap = Math.hypot(other[0] - pt[0], other[1] - pt[1]) * k;
+          return gap < radius * 7;
+        });
+        if (!crowded) {
+          ctx.fillStyle = "#111";
+          ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+          ctx.textBaseline = "bottom";
+          ctx.fillText(NAMES[index] || String(index + 1), px + 5, py - 4);
+        }
+      });
     });
 
-    var first = faces[0].facial_area;
-    var size = Math.round(first.width) + "x" + Math.round(first.height);
+    var first = faces[0].facial_area || {};
+    var size = Math.round(first.width || 0) + "x" + Math.round(first.height || 0);
+    var tail = dots ? " - " + dots + " points" : "";
     if (failed.length) {
-      report("Box " + size + " px, failed: " + failed.join(", "));
+      report("Box " + size + " px" + tail + ", failed: " + failed.join(", "));
     } else {
-      report("Box " + size + " px, all checks passed");
+      report("Box " + size + " px" + tail + ", all checks passed");
     }
   }
 
@@ -143,5 +201,9 @@
     shown.addEventListener("error", once);
   }
 
+  function clear() {
+    var cv = document.getElementById("boxCanvas");
+    if (cv) { cv.width = 0; }
+  }
   window.FaceBoxOverlay = { draw: draw, clear: clear };
 })();
