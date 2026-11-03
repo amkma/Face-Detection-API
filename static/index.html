@@ -157,6 +157,10 @@
       color: #e2e8f0;
       max-height: 250px;
     }
+      #overlay { display: none; margin-top: 10px; }
+    #boxCanvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+    #boxStage { position: relative; display: inline-block; }
+    #boxLegend { font-size: 12px; opacity: .78; margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -180,6 +184,13 @@
     <div id="statusBanner" class="status-banner"></div>
     <div id="issuesCard" class="issues-card" style="display:none;"></div>
     <div class="checks-grid" id="checksGrid"></div>
+  </div>
+
+  <div id="overlay" style="display:none;">
+    <div id="boxStage">
+      <canvas id="boxCanvas"></canvas>
+    </div>
+    <div id="boxLegend"></div>
   </div>
 
   <details id="rawDetails" style="display:none;">
@@ -257,6 +268,7 @@
 
       const passed = Boolean(data.acceptable_for_enrollment);
       const q = data.quality || {};
+      if (window.FaceBoxOverlay) { window.FaceBoxOverlay.draw(data); }
 
       // Status banner
       statusBanner.style.background = "";
@@ -284,8 +296,14 @@
       // Individual checklist cards
       const faceDetected = Boolean(data.face_detected);
       const blurOk = q.blur_variance >= 50;
-      const fullFaceVisible = Boolean(q.full_face_visible) && q.visible_eye_count >= 2 && Boolean(q.mouth_visible);
-      const eyesOpen = q.open_eye_count >= 2;
+      const checks = data.checks || [];
+      const failedNames = (data.failed_checks || []).join(", ");
+      const statusOf = (name) => {
+        const row = checks.find((c) => c.name === name);
+        return row ? (row.passed ? "ok" : "bad") : "unknown";
+      };
+      const fullFaceVisible = failedNames.length === 0;
+      const eyesOpen = statusOf("landmarks_inside") === "ok";
 
       checksGrid.innerHTML = `
         <div class="check-card">
@@ -293,7 +311,7 @@
           <span class="value ${faceDetected && data.face_count === 1 ? "badge-ok" : "badge-bad"}">
             ${faceDetected ? (data.face_count === 1 ? "✔️ 1 Face Detected" : `❌ ${data.face_count} Faces`) : "❌ No Face"}
           </span>
-          <span class="detail">SCRFD score: ${q.detection_confidence ? (q.detection_confidence * 100).toFixed(0) + "%" : "N/A"}</span>
+          <span class="detail">YuNet score: ${data.detection_confidence ? (data.detection_confidence * 100).toFixed(0) + "%" : "N/A"}</span>
         </div>
 
         <div class="check-card">
@@ -301,7 +319,7 @@
           <span class="value ${fullFaceVisible ? "badge-ok" : "badge-bad"}">
             ${fullFaceVisible ? "✔️ Full Face Visible" : "❌ Face Partly Covered"}
           </span>
-          <span class="detail">Eyes visible: ${q.visible_eye_count ?? 0}/2 · lower face: ${q.mouth_visible ? "visible" : "covered"}</span>
+          <span class="detail">${failedNames ? "Failed: " + failedNames : "All checks passed"}</span>
         </div>
 
         <div class="check-card">
@@ -309,7 +327,7 @@
           <span class="value ${eyesOpen ? "badge-ok" : "badge-bad"}">
             ${eyesOpen ? "✔️ Both Eyes Open" : "❌ Keep Both Eyes Open"}
           </span>
-          <span class="detail">${q.open_eye_count ?? 0} of 2 eyes classified open</span>
+          <span class="detail">landmarks_inside: ${statusOf("landmarks_inside")}</span>
         </div>
 
         <div class="check-card">
@@ -374,6 +392,7 @@
         placeholder.style.display = "none";
       }
     };
-  </script>
+    </script>
+  <script src="/overlay.js"></script>
 </body>
 </html>

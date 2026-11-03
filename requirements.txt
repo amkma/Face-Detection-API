@@ -1,8 +1,10 @@
 fastapi>=0.115.0
 uvicorn>=0.30.0
 python-multipart>=0.0.9
+# Detector + crop only: no recognition runtime, so no non-commercial weights.
+# YuNet ships inside OpenCV's dnn (cv2.FaceDetectorYN); the pinned .onnx blob is
+# fetched by `python -m app.fetch_models` (Apache-2.0, sha256-checked).
+# insightface is NOT a dependency: its model zoo is non-commercial research only.
 opencv-python-headless>=4.8.0
 numpy>=1.24.0
 pillow>=10.0.0
-insightface==2.1
-onnxruntime>=1.16.0
