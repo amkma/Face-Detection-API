@@ -40,6 +40,10 @@ def _response(accepted: bool, flaws: str, result: dict[str, Any], status_code: i
             "landmarks": result.get("landmarks"),
             "detection_confidence": result.get("detection_confidence"),
             "quality": result.get("quality"),
+            # The per-gate verdicts. Without these the page can render the box
+            # and the numbers but not say which gate failed, so it labels every
+            # unlisted check "unknown" -- including on a rejection.
+            "checks": result.get("checks"),
         },
     )
 

@@ -153,24 +153,28 @@ def _get_detector() -> Any:
     return _DETECTOR
 
 
-def _detector_input(image_bgr: np.ndarray) -> tuple[np.ndarray, float]:
-    """Letterbox ``image_bgr`` to ``DET_SIZE`` on the left edge; return it and its scale.
+def _detector_input(image_bgr: np.ndarray) -> tuple[np.ndarray, float, int, int]:
+    """Letterbox ``image_bgr`` into ``DET_SIZE``, centred; return it, its scale, and pads.
 
     ``FaceDetectorYN`` was exported at one fixed size and does not letterbox.
     Squashing a portrait frame to square would distort faces, so the frame keeps
-    its aspect and the spare width is filled with black on the right. The fill is
-    padding, not content: the back-map divides by this one factor and never adds
-    an offset, which is only correct because the frame is pinned to the top-left.
+    its aspect and spare pixels are padded with black. The resized frame is
+    centred in the canvas and the pads come back with it: a 1:1 frame fills the
+    canvas exactly (pad 0, the old behaviour), while a portrait or landscape
+    frame is offset by an amount the caller subtracts back before use.
     """
     height, width = image_bgr.shape[:2]
     det_w, det_h = DET_SIZE
     scale = min(det_w / width, det_h / height)
     new_w = max(1, int(round(width * scale)))
     new_h = max(1, int(round(height * scale)))
+    # Centre the resized frame; pad 0 whenever it fills the canvas 1:1.
+    off_x = (det_w - new_w) // 2
+    off_y = (det_h - new_h) // 2
     resized = cv2.resize(image_bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
     canvas = np.zeros((det_h, det_w, 3), dtype=np.uint8)
-    canvas[:new_h, :new_w] = resized
-    return canvas, new_w / width
+    canvas[off_y : off_y + new_h, off_x : off_x + new_w] = resized
+    return canvas, scale, off_x, off_y
 
 
 # Landmark order: eyes and mouth corners measured, middle point not.
@@ -203,19 +207,29 @@ def _order_as_arcface(points: np.ndarray) -> np.ndarray:
     return points[_YUNET_TO_ARCFACE]
 
 
-def _scale_face(face: np.ndarray, scale: float) -> Any:
+
+def _scale_face(face: np.ndarray, scale: float, off_x: int = 0, off_y: int = 0) -> Any:
     """One YuNet row (``x, y, w, h`` + 5 points + score) in source-image pixels.
 
     Exposure is ``(score, bbox_xyxy, kps)`` - the same shape the old
     ``FaceAnalysis`` result gave - so ``_face_payload`` and ``_align`` never
     learn which detector produced a face. YuNet hands back ``w, h``; ``bbox``
     wants ``x2, y2``, hence the two adds.
+
+    ``off_x``/``off_y`` are the letterbox pads. The row is measured on the
+    padded canvas, the caller wants it on the source image, so the pad comes
+    off the position and not off the size. Both are 0 on a 1:1 frame.
     """
-    x, y, box_w, box_h = (float(value) / scale for value in face[:4])
+    box_x = (float(face[0]) - off_x) / scale
+    box_y = (float(face[1]) - off_y) / scale
+    box_w = float(face[2]) / scale
+    box_h = float(face[3]) / scale
     points = np.asarray(face[4:14], dtype=np.float32).reshape(5, 2) / scale
+    points[:, 0] -= off_x / scale
+    points[:, 1] -= off_y / scale
     score = float(face[14])
     return SimpleNamespace(
-        bbox=np.array([x, y, x + box_w, y + box_h], dtype=np.float64),
+        bbox=np.array([box_x, box_y, box_x + box_w, box_y + box_h], dtype=np.float64),
         kps=points,
         det_score=score,
     )
@@ -224,7 +238,7 @@ def _scale_face(face: np.ndarray, scale: float) -> Any:
 def _detect(image_bgr: np.ndarray) -> list[Any]:
     """Every face YuNet finds in ``image_bgr``, located in source-image pixels."""
     detector = _get_detector()
-    det_input, input_scale = _detector_input(image_bgr)
+    det_input, input_scale, off_x, off_y = _detector_input(image_bgr)
 
     # The graph has one fixed input size. A bare ``detect()`` raises
     # "Size does not match" (verified), and so does a bare ``setInputSize``:
@@ -234,4 +248,5 @@ def _detect(image_bgr: np.ndarray) -> list[Any]:
     _, rows = detector.detect(np.ascontiguousarray(det_input))
     if rows is None:
         return []
-    return [_scale_face(row, input_scale) for row in rows]
+    return [_scale_face(row, input_scale, off_x, off_y) for row in rows]
+

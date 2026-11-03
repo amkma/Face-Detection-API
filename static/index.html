@@ -229,13 +229,45 @@
       }
     }
 
+    // The API takes one JSON field, "image", holding base64 bytes. It does not
+    // accept multipart uploads: sending FormData returns 400 with an empty
+    // result object, and rendering that as "no face" blames the photo for a
+    // broken request.
+    function blobToBase64(blob) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var result = String(reader.result);
+          var comma = result.indexOf(",");
+          resolve(comma === -1 ? result : result.slice(comma + 1));
+        };
+        reader.onerror = function () {
+          reject(reader.error || new Error("Could not read the file."));
+        };
+        reader.readAsDataURL(blob);
+      });
+    }
+
     async function verify(blob) {
       setLoading(true);
       try {
-        const form = new FormData();
-        form.append("image", blob, "capture.jpg");
-        const res = await fetch("/api/verify", { method: "POST", body: form });
-        const data = await res.json();
+        var image = await blobToBase64(blob);
+        var res = await fetch("/api/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: image }),
+        });
+        var data = await res.json().catch(function () {
+          return {};
+        });
+        if (!res.ok) {
+          renderError(data.flaws || ("HTTP " + res.status + " from /api/verify"));
+          return;
+        }
+        if (!("face_detected" in data) || !data.quality) {
+          renderError("Unexpected response from /api/verify. Check that the server is running this project.");
+          return;
+        }
         renderResults(data);
       } catch (err) {
         renderError("Request failed: " + err.message);
@@ -245,15 +277,17 @@
       }
     }
 
+
     function renderError(msg) {
       resultsArea.style.display = "block";
       statusBanner.className = "status-banner failed";
       statusBanner.innerHTML = `
-        <div class="status-title">❌ Verification Error</div>
+        <div class="status-title">\u274c Request error</div>
         <div class="status-desc">${msg}</div>
       `;
       issuesCard.style.display = "none";
       checksGrid.innerHTML = "";
+      rawDetails.style.display = "none";
     }
 
     function renderResults(data) {
@@ -266,7 +300,10 @@
         return;
       }
 
-      const passed = Boolean(data.acceptable_for_enrollment);
+      // The contract publishes `accepted`, not `acceptable_for_enrollment`.
+      // Reading a key the API never sends left this permanently false, so a
+      // passing photo rendered as "Rejected" with every card green.
+      const passed = data.accepted === true;
       const q = data.quality || {};
       if (window.FaceBoxOverlay) { window.FaceBoxOverlay.draw(data); }
 
@@ -384,13 +421,17 @@
       }
     };
 
-    fileInput.onchange = () => {
+    fileInput.onchange = async () => {
       const f = fileInput.files && fileInput.files[0];
-      if (f) {
-        preview.src = URL.createObjectURL(f);
-        preview.style.display = "block";
-        placeholder.style.display = "none";
-      }
+      if (!f) { return; }
+      preview.src = URL.createObjectURL(f);
+      preview.style.display = "block";
+      placeholder.style.display = "none";
+      video.style.display = "none";
+      // A chosen file IS the intent to check it. Requiring a second click on
+      // "Check image" left the input populated but nothing sent, which looks
+      // exactly like a broken detector: every card renders blank.
+      await verify(f);
     };
     </script>
   <script src="/overlay.js"></script>
