@@ -158,9 +158,10 @@
       max-height: 250px;
     }
       #overlay { display: none; margin-top: 10px; }
-    #boxCanvas { position: absolute; left: 0; top: 0; pointer-events: none; }
-    #boxStage { position: relative; display: inline-block; }
-    #boxLegend { font-size: 12px; opacity: .78; margin-top: 6px; }
+    #boxCanvas { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 2; }
+    #boxStage { position: relative; display: inline-block; line-height: 0; align-self: flex-start; }
+    #boxStage .preview { display: block; }
+    #boxLegend { font-size: 12px; opacity: .78; margin-top: 6px; text-align: center; }
   </style>
 </head>
 <body>
@@ -175,22 +176,19 @@
 
   <div class="media-container">
     <div id="placeholder" class="placeholder">Select an image or launch the webcam to test</div>
-    <video id="video" autoplay playsinline style="display:none;"></video>
+    <video id="video" autoplay playsinline muted style="display:none;"></video>
     <canvas id="canvas" style="display:none;"></canvas>
-    <img id="preview" class="preview" alt="Preview" style="display:none;" />
+    <div id="boxStage" style="display:none;">
+      <img id="preview" class="preview" alt="Preview" />
+      <canvas id="boxCanvas"></canvas>
+    </div>
   </div>
+  <div id="boxLegend"></div>
 
   <div id="resultsArea" style="display:none;">
     <div id="statusBanner" class="status-banner"></div>
     <div id="issuesCard" class="issues-card" style="display:none;"></div>
     <div class="checks-grid" id="checksGrid"></div>
-  </div>
-
-  <div id="overlay" style="display:none;">
-    <div id="boxStage">
-      <canvas id="boxCanvas"></canvas>
-    </div>
-    <div id="boxLegend"></div>
   </div>
 
   <details id="rawDetails" style="display:none;">
@@ -212,6 +210,23 @@
     const rawDetails = document.getElementById("rawDetails");
     const btnFile = document.getElementById("btnFile");
     const btnCam = document.getElementById("btnCam");
+    const boxStage = document.getElementById("boxStage");
+    // The API answers with the numbers it measured. This page draws them on the
+    // picture and nowhere else: a copy of the image in the JSON would double
+    // every response and be stale the moment the verdict changed.
+    function base64Of(dataUrl) {
+      var comma = dataUrl.indexOf(",");
+      return comma === -1 ? dataUrl : dataUrl.slice(comma + 1);
+    }
+
+    function showImage(dataUrl) {
+      preview.src = dataUrl;
+      preview.style.display = "block";
+      boxStage.style.display = "block";
+      boxLegend.style.display = "block";
+      placeholder.style.display = "none";
+      window.FaceBoxOverlay.clear();
+    }
 
     function setLoading(isLoading) {
       btnFile.disabled = isLoading;
@@ -248,9 +263,10 @@
       });
     }
 
-    async function verify(blob) {
+    async function verify(blob, dataUrl, quality) {
       setLoading(true);
       try {
+        showImage(dataUrl || URL.createObjectURL(blob));
         var image = await blobToBase64(blob);
         var res = await fetch("/api/verify", {
           method: "POST",
@@ -332,7 +348,6 @@
 
       // Individual checklist cards
       const faceDetected = Boolean(data.face_detected);
-      const blurOk = q.blur_variance >= 50;
       const checks = data.checks || [];
       const failedNames = (data.failed_checks || []).join(", ");
       const statusOf = (name) => {
@@ -341,6 +356,20 @@
       };
       const fullFaceVisible = failedNames.length === 0;
       const eyesOpen = statusOf("landmarks_inside") === "ok";
+      const visibilityDetail = !faceDetected
+        ? "Not evaluated \u2014 no face was detected"
+        : (fullFaceVisible ? "All checks passed" : "Failed: " + failedNames);
+      const eyeDetail = !faceDetected
+        ? "Can\u2019t check \u2014 no face was detected"
+        : (eyesOpen ? "Both landmarks inside the box" : "landmarks_inside: " + statusOf("landmarks_inside"));
+      const sharpOk = q.blur_variance != null && q.blur_variance >= 50;
+      const sharpDetail = q.blur_variance == null
+        ? "Can\u2019t tell \u2014 no face was detected, so sharpness was not measured"
+        : "Variance: " + q.blur_variance + " (need \u2265 50)";
+      const brightOk = q.brightness != null && q.brightness >= 35 && q.brightness <= 225;
+      const brightDetail = q.brightness == null
+        ? "Can\u2019t tell \u2014 no face was detected, so brightness was not measured"
+        : "Brightness: " + q.brightness + "/255 (need 35\u2013225)";
 
       checksGrid.innerHTML = `
         <div class="check-card">
@@ -356,83 +385,161 @@
           <span class="value ${fullFaceVisible ? "badge-ok" : "badge-bad"}">
             ${fullFaceVisible ? "✔️ Full Face Visible" : "❌ Face Partly Covered"}
           </span>
-          <span class="detail">${failedNames ? "Failed: " + failedNames : "All checks passed"}</span>
+          <span class="detail">${visibilityDetail}</span>
         </div>
 
         <div class="check-card">
           <span class="label">Eye State</span>
-          <span class="value ${eyesOpen ? "badge-ok" : "badge-bad"}">
-            ${eyesOpen ? "✔️ Both Eyes Open" : "❌ Keep Both Eyes Open"}
+          <span class="value ${eyesOpen ? "badge-ok" : (faceDetected ? "badge-bad" : "")}">
+            ${eyesOpen ? "\u2714\ufe0f Both Eyes Open" : (faceDetected ? "\u274c Keep Both Eyes Open" : "\u2014 Not evaluated")}
           </span>
-          <span class="detail">landmarks_inside: ${statusOf("landmarks_inside")}</span>
+          <span class="detail">${eyeDetail}</span>
         </div>
 
         <div class="check-card">
           <span class="label">Image Sharpness</span>
-          <span class="value ${blurOk ? "badge-ok" : "badge-bad"}">
-            ${blurOk ? "✔️ Sharp" : "❌ Blurry"}
+          <span class="value ${sharpOk ? "badge-ok" : (q.blur_variance == null ? "" : "badge-bad")}">
+            ${sharpOk ? "\u2714\ufe0f Sharp" : (q.blur_variance == null ? "\u2014 Not measured" : "\u274c Blurry")}
           </span>
-          <span class="detail">Variance: ${q.blur_variance ?? "N/A"}</span>
+          <span class="detail">${sharpDetail}</span>
         </div>
 
         <div class="check-card">
           <span class="label">Lighting</span>
-          <span class="value ${q.brightness >= 35 && q.brightness <= 225 ? "badge-ok" : "badge-bad"}">
-            ${q.brightness >= 35 && q.brightness <= 225 ? "✔️ Well Lit" : "❌ Poor Lighting"}
+          <span class="value ${brightOk ? "badge-ok" : (q.brightness == null ? "" : "badge-bad")}">
+            ${brightOk ? "\u2714\ufe0f Well Lit" : (q.brightness == null ? "\u2014 Not measured" : "\u274c Poor Lighting")}
           </span>
-          <span class="detail">Brightness: ${q.brightness ?? "N/A"}/255</span>
+          <span class="detail">${brightDetail}</span>
         </div>
       `;
     }
 
-    btnFile.onclick = async () => {
-      const f = fileInput.files && fileInput.files[0];
-      if (!f) { alert("Choose an image first"); return; }
-      preview.src = URL.createObjectURL(f);
-      preview.style.display = "block";
-      placeholder.style.display = "none";
-      video.style.display = "none";
-      await verify(f);
-    };
-
-    btnCam.onclick = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }
-        });
-        video.srcObject = stream;
-        video.style.display = "block";
-        placeholder.style.display = "none";
-        preview.style.display = "none";
-        await video.play();
-        // Allow camera sensor auto-exposure and focus to settle
-        await new Promise(r => setTimeout(r, 1000));
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext("2d").drawImage(video, 0, 0);
-        stream.getTracks().forEach(t => t.stop());
-        video.style.display = "none";
-        const blob = await new Promise(r => canvas.toBlob(r, "image/jpeg", 0.95));
-        preview.src = canvas.toDataURL("image/jpeg");
-        preview.style.display = "block";
-        await verify(blob);
-      } catch (e) {
-        alert("Webcam error: " + e.message);
-      }
-    };
-
     fileInput.onchange = async () => {
       const f = fileInput.files && fileInput.files[0];
       if (!f) { return; }
-      preview.src = URL.createObjectURL(f);
-      preview.style.display = "block";
-      placeholder.style.display = "none";
       video.style.display = "none";
       // A chosen file IS the intent to check it. Requiring a second click on
       // "Check image" left the input populated but nothing sent, which looks
       // exactly like a broken detector: every card renders blank.
       await verify(f);
     };
+
+    btnFile.onclick = async () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) {
+        renderError("Choose an image first. On a phone, \"Check image\" opens the camera, so a picture taken in another app or a screenshot is off the menu.");
+        return;
+      }
+      video.style.display = "none";
+      await verify(f);
+    };
+
+    // Cameras up to 4K only work after permission is granted; check while the
+    // picker is still the right place to choose one.
+    async function cameraSize() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { return null; }
+      var stream = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        var track = stream.getVideoTracks()[0];
+        if (!track) { return null; }
+        var settings = track.getSettings();
+        var label = track.label || "camera";
+        var w = settings.width || 0;
+        var h = settings.height || 0;
+        if (!w) {
+          var tmp = document.createElement("video");
+          tmp.muted = true;
+          tmp.srcObject = stream;
+          await tmp.play();
+          w = tmp.videoWidth;
+          h = tmp.videoHeight;
+        }
+        return label + " \u00b7 " + w + "\u00d7" + h;
+      } catch (e) {
+        return "Camera not available (" + messageOf(e) + ")";
+      } finally {
+        if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); }
+      }
+    }
+
+    function pickFrame(video, canvas, warmed) {
+      // Reuse the canvas that was already shown. Setting width/height clears it in
+      // every browser, so the picture blinks to black unless it is set before draw.
+      var w = video.videoWidth;
+      var h = video.videoHeight;
+      if (!w || !h) {
+        throw new Error("The camera has not produced a frame yet.");
+      }
+      canvas.width = w;
+      canvas.height = h;
+      var ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, w, h);
+      // A stream that opens before the sensor warms up can deliver an all-black
+      // frame. That frame passes to the detector as "no face", and the user reads
+      // it as a rejection of their face. Measure a sample downscaled with
+      // smoothing on; the sensor noise always averages well away from 0.
+      var small = document.createElement("canvas");
+      small.width = 64;
+      small.height = 64;
+      small.getContext("2d").drawImage(video, 0, 0, 64, 64);
+      var px = small.getContext("2d").getImageData(0, 0, 64, 64).data;
+      var sum = 0;
+      for (var i = 0; i < px.length; i += 4) {
+        sum += px[i] + px[i + 1] + px[i + 2];
+      }
+      var mean = sum / (px.length / 4) / 3;
+      if (warmed.ink || mean > 6) {
+        warmed.ink = true;
+        warmed.mean = mean;
+        return Promise.resolve({ dataUrl: canvas.toDataURL("image/jpeg", 0.95), w: w, h: h });
+      }
+      return new Promise(function (resolve) { setTimeout(resolve, 120); })
+        .then(function () { return pickFrame(video, canvas, warmed); });
+    }
+
+    function messageOf(err) {
+      if (!err) { return "unknown error"; }
+      if (err.name && err.name !== "Error") { return err.name; }
+      return err.message || String(err);
+    }
+
+    (async function () {
+      var text = await cameraSize();
+      if (text) { fileInput.title = "Camera: " + text; }
+    })();
+
+    btnCam.onclick = async () => {
+      var stream = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        video.srcObject = stream;
+        canvas.style.display = "block";
+        video.style.display = "block";
+        placeholder.textContent = "Starting the camera…";
+        await video.play();
+        var warmed = {};
+        var frame = await pickFrame(video, canvas, warmed);
+        var shotBlob = await (await fetch(frame.dataUrl)).blob();
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        stream = null;
+        video.pause();
+        video.srcObject = null;
+        video.style.display = "none";
+        canvas.style.display = "none";
+        placeholder.style.display = "none";
+        await verify(shotBlob, frame.dataUrl, { quality: 0.95, width: frame.w });
+      } catch (e) {
+        if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); }
+        video.style.display = "none";
+        canvas.style.display = "none";
+        renderError("Webcam: " + messageOf(e));
+      }
+    };
+
+
     </script>
   <script src="/overlay.js"></script>
 </body>
