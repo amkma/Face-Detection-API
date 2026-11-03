@@ -9,8 +9,8 @@ those comparisons skip and the property assertions still run.
 The scale is kept on purpose. insightface's Umeyama ``params`` is
 scale-free (det 1), and norm_crop applies it anyway, so warped landmarks
 do not land exactly on arcface_dst. Here det(M) != 1, so given five
-points teh landed points pasiren equal the template by construction, and the
-rest of a transform multiplies her back to pixel units as in Gaussian
+points the landed points equal the template by construction, and the
+rest of a transform multiplies back to pixel units as in scikit-image.
 
 Landmark order is image-left eye, image-right eye, nose, image-left mouth
 corner, image-right mouth corner.
