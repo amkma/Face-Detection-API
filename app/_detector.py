@@ -245,7 +245,12 @@ def _detect(image_bgr: np.ndarray) -> list[Any]:
     # the input size is what ``setInputSize`` says *and* the call carries the
     # frame to match it. Both together, in that order.
     detector.setInputSize(DET_SIZE)
-    _, rows = detector.detect(np.ascontiguousarray(det_input))
+    # setInputSize and detect both write to the session, so they are one step:
+    # two requests interleaving here raced the input size (OpenCV 500s), and
+    # one request could detect on the other's frame. The lock covers the two
+    # calls, not the decode -- that stays outside this function.
+    with _DETECTOR_LOCK:
+        _, rows = detector.detect(np.ascontiguousarray(det_input))
     if rows is None:
         return []
     return [_scale_face(row, input_scale, off_x, off_y) for row in rows]

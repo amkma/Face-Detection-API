@@ -273,8 +273,12 @@
     async function verify(blob, dataUrl, quality) {
       setLoading(true);
       try {
-        showImage(dataUrl || URL.createObjectURL(blob));
-        var image = await blobToBase64(blob);
+        showImage(
+          dataUrl || (typeof blob == "string" ? blob : URL.createObjectURL(blob))
+        );
+        var image = (typeof blob == "string")
+          ? blob.slice(blob.indexOf(",") + 1)
+          : await blobToBase64(blob);
         var res = await fetch("/api/verify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -578,7 +582,7 @@
       }
       if (!dataUrl || dataUrl === lastDataUrl) { return; }
       lastDataUrl = dataUrl;
-      await verify({ camera: true }, dataUrl);
+      await verify(dataUrl);
     }
 
     function pollTick() {
