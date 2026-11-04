@@ -151,13 +151,16 @@ needs it.
 
 ## Licence
 
-This project: MIT. The face detection model in `models/` ships under its own
-terms; that file is next to it, out at `models/LICENSE-yunet.txt`. The
-face-landmarker model in `models/face_landmarker.task` is Apache-2.0 (Google
-MediaPipe), redistributed unmodified; Apache-2.0 §4 requires that the
-recipient be given a copy of the licence and told that the file was changed.
-Neither the licence text nor the change notice is in the tree yet, and both
-are needed before a distribution of this repository.
+This project: MIT. The models in `models/` ship under their own terms, and
+each one has its licence text next to it:
+
+- `face_detection_yunet_2023mar.onnx` -- MIT (OpenCV Zoo), in
+  `models/LICENSE-yunet.txt`.
+- `face_landmarker.task` -- Apache-2.0 (Google MediaPipe), in
+  `models/LICENSE-face_landmarker.txt`. It is redistributed unmodified and
+  unretrained; `models/README.md` records the upstream URL, the byte count,
+  and the SHA-256 of the exact artefact. `app/_eyes.py` refuses to load a file
+  whose digest differs, so neither licence nor behaviour can drift silently.
 
 ## Hosting
 

@@ -25,3 +25,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# MediaPipe FaceLandmarker weights (Apache-2.0, 3.7 MB). Not source: fetched
+# by `python -m app.fetch_models` and sha256-checked in app/_eyes.py.
+models/face_landmarker.task

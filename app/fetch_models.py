@@ -27,6 +27,10 @@ LICENCE_URL = (
     "https://raw.githubusercontent.com/opencv/opencv_zoo/main/"
     "models/face_detection_yunet/LICENSE"
 )
+LANDMARKER_URL = (
+    "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+    "face_landmarker/float16/latest/face_landmarker.task"
+)
 
 
 def sha256_of(path: Path) -> str:
@@ -71,10 +75,36 @@ def main() -> int:
         stage(download(LICENCE_URL), licence)
         print(f"OK   wrote {licence} (Apache-2.0)")
 
+    # The eye gate's landmarker. Same rule: a digest that does not match leaves
+    # nothing on disk, and the loader in app/_eyes.py re-checks it at import.
+    from app._eyes import MODEL_PATH as LANDMARKER_PATH
+    from app._eyes import MODEL_SHA256 as LANDMARKER_SHA256
+
+    if LANDMARKER_PATH.is_file() and sha256_of(LANDMARKER_PATH) == LANDMARKER_SHA256:
+        print(f"OK   {LANDMARKER_PATH.name} already matches {LANDMARKER_SHA256[:16]}...")
+    else:
+        print(f"GET  {LANDMARKER_URL}")
+        data = download(LANDMARKER_URL)
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != LANDMARKER_SHA256:
+            print(f"FAIL downloaded {len(data)} bytes")
+            print(f"     sha256 got      {digest}")
+            print(f"     sha256 expected {LANDMARKER_SHA256}")
+            return 1
+        stage(data, LANDMARKER_PATH)
+        print(
+            f"OK   wrote {LANDMARKER_PATH}"
+            f" ({len(data)} bytes, sha256 verified)"
+        )
+
     print()
     print("License summary for files in", MODELS_DIR)
     print(f"  {MODEL_FILE}  Apache-2.0 (OpenCV Zoo / Shiqi Yu et al.)")
     print("  Weights by Shiqi Yu et al., 'YuNet: A Tiny Millisecond-level Face Detector'.")
+    print(
+        f"  {LANDMARKER_PATH.name}  Apache-2.0 (Google MediaPipe);"
+        " see models/LICENSE-face_landmarker.txt"
+    )
     return 0
 
 
