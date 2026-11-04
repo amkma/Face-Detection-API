@@ -89,7 +89,10 @@ def measure(image_bgr: np.ndarray) -> dict | None:
     points): the caller must report that, not "closed".
     """
     landmarker = _landmarker()
-    if landmarker is None:
+    if not landmarker:
+        # False: the model is absent or its digest is wrong. That is a hold
+        # ("could not be measured"), never a claim that the eyes are closed --
+        # and not an AttributeError on a bool either.
         return None
     import cv2
     import mediapipe as mp
@@ -118,7 +121,10 @@ def measure(image_bgr: np.ndarray) -> dict | None:
 def landmark_points(image_bgr: np.ndarray) -> np.ndarray | None:
     """All mesh points, in image pixels. None when the frame has no face."""
     landmarker = _landmarker()
-    if landmarker is None:
+    if not landmarker:
+        # False: the model is absent or its digest is wrong. That is a hold
+        # ("could not be measured"), never a claim that the eyes are closed --
+        # and not an AttributeError on a bool either.
         return None
     import cv2
     import mediapipe as mp
