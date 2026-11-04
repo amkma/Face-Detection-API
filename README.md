@@ -152,7 +152,12 @@ needs it.
 ## Licence
 
 This project: MIT. The face detection model in `models/` ships under its own
-terms; that file is next to it, out at `models/LICENSE-yunet.txt`.
+terms; that file is next to it, out at `models/LICENSE-yunet.txt`. The
+face-landmarker model in `models/face_landmarker.task` is Apache-2.0 (Google
+MediaPipe), redistributed unmodified; Apache-2.0 §4 requires that the
+recipient be given a copy of the licence and told that the file was changed.
+Neither the licence text nor the change notice is in the tree yet, and both
+are needed before a distribution of this repository.
 
 ## Hosting
 

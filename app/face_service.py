@@ -43,6 +43,7 @@ from app._detector import (  # noqa: F401  re-exported: main.py imports FaceAnal
     _detect,
     _get_detector,
 )
+from app import _eyes
 
 LOG = logging.getLogger(__name__)
 
@@ -380,6 +381,14 @@ def _face_payload(face: Any, image_bgr: np.ndarray) -> dict[str, Any]:
         gray = cv2.cvtColor(measured, cv2.COLOR_BGR2GRAY)
         blur_variance = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
+    # Closed eyes, measured on landmark geometry rather than classifier pixels
+    # (why: see app/_eyes.py). A frame where the eyes cannot be measured is a
+    # hold, never a "closed" -- the eye gate must not become a single point of
+    # rejection.
+    eye_measure = _eyes.measure(image_bgr)
+    eyes_ok, eye_reason, eyes_measurable = _eyes.verdict(eye_measure)
+    checks.append(Check("eyes_open", eyes_ok, eye_measure, eye_reason))
+
     sharp_ok = blur_variance >= MIN_BLUR_VARIANCE
     checks.append(
         Check(
@@ -435,6 +444,7 @@ def _face_payload(face: Any, image_bgr: np.ndarray) -> dict[str, Any]:
         },
         "failed_checks": failed,
         "checks": [check.as_dict() for check in checks],
+        "eye_measure": eye_measure,
         "acceptable_for_enrollment": not failed,
         "message": "One clear face detected."
         if not failed

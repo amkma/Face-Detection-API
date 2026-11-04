@@ -1,0 +1,894 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[a4paper,top=2.3cm,bottom=2.3cm,left=2.3cm,right=2.3cm,headheight=14pt]{geometry}
+\usepackage{xcolor}
+\usepackage[most]{tcolorbox}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage[hidelinks]{hyperref}
+
+% ---------------------------------------------------------------
+% Colours and metadata
+% ---------------------------------------------------------------
+\definecolor{ink}{HTML}{1F2933}
+\definecolor{accent}{HTML}{0F5C8C}
+\definecolor{soft}{HTML}{8A94A6}
+\definecolor{rule}{HTML}{D8DEE6}
+\definecolor{notebg}{HTML}{EAF3F9}
+\definecolor{warnbg}{HTML}{FFF4E5}
+\definecolor{warnline}{HTML}{D98A1F}
+\definecolor{codebg}{HTML}{F5F7F9}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accent,
+  urlcolor=accent,
+  citecolor=accent,
+  pdftitle={Clear Face Detection API -- Technical Notes},
+  pdfauthor={Abdullah Khalifa},
+  pdfsubject={Face enrollment quality gate}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{soft}Clear Face Detection API}
+\fancyhead[R]{\small\color{soft}Technical Notes}
+\fancyfoot[C]{\small\color{soft}\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{\color{rule}\hrule width\headwidth height\headrulewidth}
+
+\titleformat{\section}
+  {\Large\bfseries\color{accent}}{\thesection}{0.7em}{}
+  [{\vspace{2pt}\color{rule}\titlerule[0.6pt]}]
+\titleformat{\subsection}
+  {\large\bfseries\color{ink}}{\thesubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{16pt}{7pt}
+\titlespacing*{\subsection}{0pt}{11pt}{4pt}
+
+\newtcolorbox{keybox}{
+  colback=notebg, colframe=accent, boxrule=0.6pt, leftrule=3pt,
+  arc=1pt, left=7pt, right=7pt, top=5pt, bottom=6pt
+}
+
+\newtcolorbox{warnbox}{
+  colback=warnbg, colframe=warnline, boxrule=0.6pt, leftrule=3pt,
+  arc=1pt, left=7pt, right=7pt, top=5pt, bottom=6pt
+}
+
+\newcommand{\coden}[1]{\texttt{\small #1}}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{rule},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  xleftmargin=6pt,
+  xrightmargin=6pt,
+  aboveskip=6pt,
+  belowskip=6pt
+  }
+
+\setlist[itemize]{leftmargin=1.3em,itemsep=2pt,topsep=3pt}
+\setlist[enumerate]{leftmargin=1.5em,itemsep=2pt,topsep=3pt}
+
+\captionsetup{font=small,labelfont=bf,skip=6pt}
+
+\title{\vspace{-1.6cm}\textbf{Clear Face Detection API}\\[4pt]
+  \large Technical Notes: Design, Gates published, and the Closed-Eye Study}
+\author{Abdullah Khalifa}
+\date{\today}
+
+\begin{document}
+
+\title{\vspace{-1.2cm}\textbf{Clear Face Detection API}\\[4pt]
+  \large Technical Notes: Design, Published Gates, and the
+  Closed-Eye Study}
+\author{Abdullah Khalifa}
+\date{4 November 2026}
+\maketitle
+
+\vspace{-6pt}
+\begin{center}
+\color{soft}\small
+Version 1.0.0 \textbar{} branch \coden{fix/p0-detection} \textbar{} HEAD
+\coden{9459f86} \textbar{} LaTeX 13 pp.
+\end{center}
+
+\begin{keybox}
+\textbf{Abstract.} The service takes a single base64-encoded image and
+decides whether the face in it is good enough to \emph{enroll}. It is a
+gatekeeper: it returns a pass or fail verdict with a reason, not an
+identity. This note has three parts: (i) the pipeline and the gates it
+publishes, (ii) the correctness defects found and fixed while the API
+and the webcam page were made to fit it, and (iii) the closed-eye check
+built on landmark geometry, with the data behind it -- and the claim
+that data does \emph{not} support.
+\end{keybox}
+
+\tableofcontents
+\newpage
+% ======================================================================
+% 1. Problem statement
+% ======================================================================
+\section{Problem Statement and Scope}
+
+The service accepts an image and decides whether the face in it may be
+used \emph{for enrollment}. Enrollment is stricter than recognition: a
+recogniser will happily keep a blurry identity vector that happens to
+match the right person, but an enrollment system that stores that vector
+poisons every later match. The gate must therefore fail \emph{early} and
+\emph{legibly}.
+
+The contract has three parts:
+
+\begin{enumerate}
+  \item \textbf{Verdict.} \coden{accepted} is a boolean, \coden{flaws} a
+        human-readable reason, and \coden{checks} a list of per-gate
+        records. A rejection without the failing gate's name is a bug,
+        not a user-error message.
+  \item \textbf{No identity.} No recognition runtime is imported
+        anywhere in the package. See Table~\ref{tab:licences} for why
+        this is a licensing constraint, not a taste.
+  \item \textbf{One face.} Zero faces is \emph{no face}; two or more is
+        \emph{ambiguous}. Both are rejections with their own text, never
+        a silent pick of the largest box.
+\end{enumerate}
+
+\begin{keybox}
+\textbf{Note.} The gate is not a ``good photo'' filter. A passport
+photo with dramatic shadows can pass; a bad webcam frame with three
+faces cannot. Every check answers \emph{one} question about whether the
+extracted face geometry can be trusted.
+\end{keybox}
+
+\begin{figure}[H]
+  \centering
+  % insert figure here: the upload page with one face boxed and five landmarks drawn
+  \caption{The enrollment page. The detector's box and five keypoints are
+  drawn over the same image it analysed.}
+  \label{fig:page}
+\end{figure}
+
+\subsection{The request and the response contract}
+\label{sec:contract}
+
+The API takes JSON, not multipart. This is deliberate: the webcam path
+already holds a base64 data URL in memory, and multipart would mean the
+page re-encodes it into a second format for no gain. The request body is
+
+\begin{lstlisting}[language=Python]
+{ "image": "<base64 data, optionally a data: URL>" }
+\end{lstlisting}
+
+The body is capped at ten mebibytes \emph{after} decoding
+(\coden{MAX\_IMAGE\_BYTES}). The response always carries the same keys,
+including when the request itself was malformed:
+
+\begin{lstlisting}
+{
+  "accepted":            bool,
+  "flaws":               str,
+  "face_detected":       bool,
+  "face_count":          int,
+  "image_size":          {w, h},
+  "facial_area":         {x, y, w, h},
+  "landmarks":           [[x, y], ... 5 points],
+  "detection_confidence": float,
+  "quality":             {...},
+  "checks":              [ {"name", "passed", "value", "detail"}, ... ]
+}
+\end{lstlisting}
+
+\begin{warnbox}
+\textbf{Why the contract is a stability requirement.} The page renders
+its banner from \coden{accepted}, its gate table from \coden{checks}, and
+its overlay from \coden{facial\_area} and \coden{landmarks}. Renaming one
+key is invisible in the server's own tests and silently breaks the
+client: the banner stays red forever and the overlay draws nothing.
+\end{warnbox}
+
+% ======================================================================
+% 2. Architecture
+% ======================================================================
+\section{Architecture}
+
+The package is small enough to read in one sitting, which is the point:
+every module answers one question.
+
+\begin{table}[H]
+\centering
+\caption{Module responsibilities.}
+\label{tab:modules}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Module} & \textbf{Responsibility} \\
+\midrule
+\coden{app/main.py}         & FastAPI surface: request model, JSON validation, static files, and the one error handler that keeps the response shape. \\
+\coden{app/\_detector.py}   & Load and checksum the YuNet ONNX blob; letterbox-to-\coden{DET\_SIZE}; \emph{serialise} \coden{setInputSize} and \coden{detect}; map boxes back to source pixels. \\
+\coden{app/\_align.py}      & Five-point alignment: roll angle, spacing ratios, ``landmarks inside'' tests. \\
+\coden{app/\_eyes.py}       & Closed/open-eye gate on MediaPipe FaceLandmarker mesh points (Section~\ref{sec:eyes}). \\
+\coden{app/face\_service.py}& Orchestration: decode, detect, crop gates, assemble \coden{Check} list, build payload. \\
+\coden{static/index.html}   & Upload page and live webcam loop (Section~\ref{sec:webcam}). \\
+\coden{bench/eye\_bench.py} & Evidence-set builder: one row per image, both corpora. \\
+\coden{bench/eye\_stats.py} & The numbers behind the eye threshold. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{keybox}
+\textbf{Invariant.} \coden{face\_service} is the only module that
+decides \emph{pass or fail}. The detector returns boxes and keypoints;
+the aligner returns angles and ratios; the eye module returns a
+measurement. Turning measurements into a verdict happens in one place.
+\end{keybox}
+% ======================================================================
+% 3. Detection and alignment
+% ======================================================================
+\section{Detection and Alignment}
+\label{sec:detection}
+
+\subsection{YuNet on a fixed canvas}
+
+The detector is YuNet shipped inside OpenCV
+(\coden{cv2.FaceDetectorYN}, Apache-2.0). The ONNX blob is not vendored
+in the repository: \coden{python -m app.fetch\_models} downloads it and
+\coden{\_detector.py} refuses to load a file whose SHA-256 differs from
+the pinned digest. A swapped blob is therefore either a build failure or
+an explicit edit, never a silent behaviour change.
+
+YuNet is loaded with a fixed input size
+\begin{equation}
+  \mathrm{DET\_SIZE} = (640,\,640),
+\end{equation}
+so an arbitrary image must be letterboxed first. Let
+$(W,H)$ be the source size and
+\begin{equation}
+  s = \min\!\left(\frac{640}{W},\,\frac{640}{H}\right)
+\end{equation}
+the scale that fits it. The resized image is centred with pads
+\begin{equation}
+  p_x = \left\lfloor\frac{640 - W s}{2}\right\rfloor,\qquad
+  p_y = \left\lfloor\frac{640 - H s}{2}\right\rfloor,
+\end{equation}
+and every returned box is mapped back to source pixels by
+\begin{equation}
+  \text{src} = \frac{\text{canvas} - p}{s}.
+  \label{eq:unletterbox}
+\end{equation}
+The letterbox exists so that a landscape frame and a portrait frame are
+\emph{judged at the same effective resolution}; without it the detector's
+pixel budget depends on the upload's aspect ratio.
+
+\subsection{The five landmarks}
+
+The five keypoints are right eye, left eye, nose, right mouth corner and
+left mouth corner, \emph{as seen by the image}, i.e.\ they are not
+mirrored to a person-centric frame. Every alignment formula below is
+therefore written for the image frame, and the page draws them in the
+same order it receives them.
+
+\subsection{Roll, spacing, and containment}
+
+\begin{keybox}
+\textbf{Definition (roll).} \emph{  The roll of the face is the angle of the eye line against the image
+  horizontal:
+  \begin{equation}
+    \theta = \operatorname{atan2}\!\left(y_L - y_R,\; x_L - x_R\right).
+  \end{equation}
+  A frame passes when $|\theta| \le \mathrm{MAX\_ROLL\_DEG}$, with
+  $\mathrm{MAX\_ROLL\_DEG}=15^{\circ}$.
+}\end{keybox}
+
+\begin{keybox}
+\textbf{Definition (five-point mean).} \emph{  For points $p_1,\dots,p_5$, the centroid is
+  \begin{equation}
+    \bar{p} = \frac{1}{5}\sum_{i=1}^{5} p_i .
+  \end{equation}
+  It is used as the reference the five points are tested against: a
+  landmark that falls outside the face box while the centroid is inside
+  is a corrupted keypoint, not a tilted head.
+}\end{keybox}
+
+\begin{keybox}
+\textbf{Why the centroid and not the box centre.}
+  A tilted or turned head moves the box centre away from the mesh; the
+  centroid moves with the mesh. Comparing points to the box centre would
+  reject lawful 3/4 poses, so the centroid is the reference and the box
+  only supplies the bounds.
+\end{keybox}
+
+\begin{keybox}
+\textbf{Why five points, not 68 or 478.}
+  Five points are the smallest set that still fixes \emph{pose}: two eyes
+  give roll, and the nose and both mouth corners give pitch and yaw
+  roughly. A dense mesh fixes shape as well, but shape is identity -- the
+  very thing a quality gate must not depend on.
+\end{keybox}
+
+% ======================================================================
+% 4. The eight gates
+% ======================================================================
+\section{The Published Gates}
+\label{sec:gates}
+
+Every gate emits a \coden{Check} record, so the page can name the failure
+instead of showing red. The thresholds are constants in
+\coden{app/\_detector.py} and \coden{app/face\_service.py}.
+
+\begin{table}[H]
+\centering
+\caption{Gate summary. \emph{Value} is what the record reports to the client.}
+\label{tab:gates}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\linewidth}{@{}l l X@{}}
+\toprule
+\textbf{Gate} & \textbf{Threshold} & \textbf{Verdict condition and reported value} \\
+\midrule
+\coden{one\_face}              & exactly 1 face          & pass iff one box after confidence filtering; value: count \\
+\coden{face\_size}             & $\ge 80\times 80$ px     & pass iff $w\ge 80$ \emph{and} $h\ge 80$; value: ``$w$x$h$'' \\
+\coden{detection\_confidence}  & $\ge 0.80$              & pass iff det score reaches it; value: score to 3 dp \\
+\coden{blur}                   & var $\ge 50$            & Laplacian variance of the crop, resampled; value: variance \\
+\coden{exposure}               & $35 \le b \le 225$       & pass iff mean grey of crop is in band; value: $b$ \\
+\coden{head\_pose}             & $|\theta| \le 15^\circ$  & pass iff roll within limit; value: degrees \\
+\coden{landmarks\_inside}       & centroid test           & pass iff all five points sit inside the box \\
+\coden{landmark\_spacing}       & ratio band              & pass iff inter-point distances are plausible \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{warnbox}
+\textbf{Pitfall: blur is resolution, not focus.} The Laplacian variance
+of a \emph{fixed metric} on a fixed face scales with the pixel count of
+the crop. The same face scores $506$ at $512$~px and $12$ at $1600$~px.
+A raw cutoff therefore judges the camera, not the sharpness of the
+frame. The crop is resampled to
+$\mathrm{BLUR\_REFERENCE\_WIDTH}=112$~px before the variance is taken,
+so the number is comparable across uploads.
+\end{warnbox}
+
+\begin{keybox}
+\textbf{Zero-error edges.}   A crop or a landmark set that lies on a boundary (for example a face
+  of exactly $80\times 80$~px) is accepted, not rejected: the rules use
+  $\ge$ and $\le$. An empty crop is a rejection with its own message, and
+  is never measured as ``variance zero, therefore blurry'': that would
+  report a confident but false reason.
+\end{keybox}
+% ======================================================================
+% 5. The closed-eyes problem
+% ======================================================================
+\section{The Closed-Eye Problem}
+\label{sec:eyes}
+
+\subsection{Why the obvious check is not the check}
+
+The repository contained a plausible left-eye/right-eye and
+``are both eyes open'' routine already. It was wrong by
+construction. The routine measures a horizontal
+gradient ratio and concludes ``open'' when the eye region is
+\emph{edge-rich}. A closed lid is precisely an intense horizontal
+edge, so the ratio peaks exactly on the frames that must be rejected.
+The wrong answer is not a side effect of a bad threshold; it is what the
+feature rewards. That module was unpicked in
+Section~\ref{sec:defects} and was withdrawn from the path of the gate.
+
+\begin{warnbox}
+\textbf{The failure mode to keep in mind.} A heuristic that is wrong in
+the same situation it is supposed to detect cannot be tuned into
+correctness. It must be removed, not re-thresholded cleanly.
+\end{warnbox}
+
+\subsection{The licence gate comes before the model gate}
+
+The requirement was an asset that can ship in a commercial product:
+open licence, commercially usable, integrated and testable. That
+requirement eliminated the obvious choices before any of them was
+trained:
+
+\begin{table}[H]
+\centering
+\caption{Datasets and models considered for the closed/open decision.}
+\label{tab:licences}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\linewidth}{@{}l l X@{}}
+\toprule
+\textbf{Asset} & \textbf{Real faces} & \textbf{Usable in a shipped product?} \\
+\midrule
+CEW (NUAA), 2\,423 faces & yes & \textbf{No.} Research use only, non-commercial, no redistribution. \\
+HF \coden{closed-open-eyes} & mixed & \textbf{No.} Its closed set is CEW under another name; its open set is a subset of the 200\,k \coden{celeba} Hugging-Face images, unlabelled. \\
+MRL Eye, ZJU & eye crops & \textbf{No.} Not whole faces, so not the input of this pipeline. \\
+\coden{face\_landmarker.task} (MediaPipe) & \textemdash{} & \textbf{Yes.} Apache-2.0, $3\,758\,596$ bytes, float16, no eye-state label. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{keybox}
+\textbf{Consequence.} The gate cannot be a learned open/closed
+classifier trained on the datasets that carry that label, because
+none of them may travel with the product. The remaining road is to
+\emph{derive} eye state from an asset that is allowed to ship.
+\end{keybox}
+
+\subsection{The Eye Aspect Ratio}
+
+The landmarker returns a mesh of $N$ points ($N=468$, or $478$ with the
+iris refinement). Two contours of six points describe each eye:
+
+\begin{equation}
+  \ell = \left(p_{33},\,p_{133},\,p_{159},\,p_{145},\,p_{158},\,p_{153}\right),\quad
+  r = \left(p_{362},\,p_{263},\,p_{386},\,p_{374},\,p_{385},\,p_{380}\right).
+\end{equation}
+
+Write a contour as $(c_1, c_2, u_1, l_1, u_2, l_2)$: two corners, then
+upper and lower lid points. The Eye Aspect Ratio is
+
+\begin{equation}
+  \mathrm{EAR} = \frac{\lVert u_1-l_1\rVert + \lVert u_2-l_2\rVert}
+                       {2\,\lVert c_1-c_2\rVert}.
+  \label{eq:ear}
+\end{equation}
+
+Equation~\eqref{eq:ear} is a ratio of \emph{lengths on the same face},
+so it is invariant to the picture's scale, to the camera's distance, and
+(up to foreshortening) to translation. This is the property that makes
+a fixed threshold legitimate.
+
+\begin{warnbox}
+\textbf{The assumption that breaks it: yaw.} Under a strong head turn
+the corner distance shrinks by $\cos\varphi$ while the lid distances
+barely do, so the EAR \emph{rises}. A closed eye in profile can therefore
+read as open. The eye gate must not be trusted on faces that are turned
+far to the side; it is a companion to \coden{head\_pose}, not a
+replacement for it.
+\end{warnbox}
+
+\subsection{Two operating points}
+
+A single cutoff makes verdicts alternate. On a camera, the frame after
+a blink lands on the other side of the cutoff; a JPEG smears the lid
+edge, and the next poll flips the answer. The gate uses a band:
+
+\begin{equation}
+  \begin{cases}
+    \text{closed}, & \text{if } \mathrm{EAR} < 0.18,\\[2pt]
+    \text{hold (half closed or blinking)}, & \text{if } 0.18 \le \mathrm{EAR} < 0.20,\\[2pt]
+    \text{open}, & \text{if } \mathrm{EAR} \ge 0.20.
+  \end{cases}
+\end{equation}
+
+The middle band rejects by asking the person to hold still, not by
+accusation ``eyes closed''. On a polling camera the median of the last
+$K$ frames is what the decision uses (Section~\ref{sec:webcam}), so one
+blink cannot end a session.
+
+\begin{keybox}\textbf{Note: not measurable is not closed.}
+  Below a corner distance of $20$~px the lid is one or two pixels thick,
+  and the ratio is noise. The module returns \texttt{None}, and the gate
+  says \emph{``Eyes could not be measured in this frame''}. Asserting
+  \emph{closed} there would turn a detection failure into a rejection
+  and the eye test into a single point of failure.
+\end{keybox}
+% ======================================================================
+% 6. Evidence
+% ======================================================================
+\section{Evidence: Two Corpora, Two Questions}
+\label{sec:evidence}
+
+A single ``accuracy'' for this gate would be a fabrication, because the
+two corpora that were run answer different questions and only one of
+them carries an eye-state label.
+
+\begin{table}[H]
+\centering
+\caption{What each corpus can and cannot support.}
+\label{tab:corpora}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\linewidth}{@{}l l l X@{}}
+\toprule
+\textbf{Corpus} & \textbf{Images} & \textbf{Label} & \textbf{Permitted claim} \\
+\midrule
+CEW subset (via HF set) & 400 & \textbf{closed} & detection rate: share of \emph{closed} eyes rejected \\
+CelebA (shards 0--1)    & 3\,070 & none (eye state) & behaviour: pass rate, i.e.\ the false-reject cost \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The Hugging-Face set \coden{MichalMlodawski/closed-open-eyes} presents
+itself as balanced closed/open. Its \coden{closed\_eyes} rows are CEW
+faces; its \coden{open\_eyes} rows come from a different upload and are
+a subset of CelebA, where CelebA has no eye-state column. A combined
+accuracy over that dataset would therefore measure on a target that was
+invented by the packaging. The evidence set keeps the two corpora
+\emph{separate} and carries the corpus name in every row.
+
+\begin{figure}[H]
+  \centering
+  % insert figure here: EAR histogram, closed corpus (100%) vs unlabelled corpus,
+  % vertical lines at 0.15, 0.18, and 0.20
+  \caption{Eye Aspect Ratio of the two corpora, with the two operating
+  points. The overlap between the distributions is the entire cost of
+  using a fixed threshold.}
+  \label{fig:ear-hist}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  % insert figure here: passing share vs threshold (two curves), crossing at
+  % 0.15 and 0.18
+  \caption{Passing share against threshold. The closed corpus falls to
+  near-zero; the unlabelled corpus has no true eye label caps, so its curve
+  is a lower bound on false rejects only.}
+  \label{fig:pass-thr}
+\end{figure}
+
+\subsection{The measured distributions}
+
+For $n=400$ labelled closed images and $n=3\,049$ measurable unlabelled
+images of the $3\,070$, the per-image estimate used by the gate is
+
+\begin{equation}
+  \hat{e} = \min\!\left(\mathrm{EAR}_{\ell},\; \mathrm{EAR}_{r}\right),
+\end{equation}
+
+i.e.\ the \emph{more closed} of the two eyes decides. The sample
+percentiles of $\hat{e}$ are the numbers behind Figures~\ref{fig:ear-hist}
+and~\ref{fig:pass-thr}:
+
+\begin{table}[H]
+\centering
+\caption{Percentiles of $\hat{e}$ per corpus (measured, not taken from
+the papers). The CEW side is 100\,\% labelled closed.}
+\label{tab:pct}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+\textbf{Corpus} & $n$ & $p_1$ & $p_5$ & \textbf{median} & $p_{95}$ & $\max$ \\
+\midrule
+CEW closed     & 400  & 0.005 & 0.007 & 0.034 & 0.116 & 0.308 \\
+CelebA         & 3\,049 & 0.085 & 0.177 & 0.309 & 0.387 & 0.571 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{The price of each operating point}
+
+Define the rejected share at threshold $t$ as
+
+\begin{equation}
+  R(t) = \frac{1}{n}\sum_{i=1}^{n} \mathbf{1}\!\left[\hat{e}_i < t\right].
+\end{equation}
+
+For the labelled CEW corpus $R(t)$ is a \emph{miss} rate (closed
+faces accepted); for the unlabelled CelebA corpus it is \emph{at best}
+an upper bound on the false-reject rate, because an unknown share of
+those faces are genuinely dozing, blinking, or squinting and the gate
+rejects them \emph{correctly}.
+
+\begin{table}[H]
+\centering
+\caption{Rejected share $R(t)$ per corpus at candidate thresholds. A
+CelebA row is a cost, not an accuracy: it counts rejections, not errors.}
+\label{tab:thresholds}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}rrr@{}}
+\toprule
+$t$ & CEW closed rejected & CelebA rejected \\
+\midrule
+0.10 & 91.75\,\% & 1.41\,\%  \\
+0.12 & 95.25\,\% & 2.10\,\%  \\
+0.15 & 97.50\,\% & 3.64\,\%  \\
+0.18 & 98.75\,\% & 5.28\,\%  \\
+0.20 & 99.00\,\% & 6.76\,\%  \\
+0.22 & 99.50\,\% & 9.35\,\%  \\
+0.25 & 99.75\,\% & 17.71\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keybox}
+\textbf{Reading the table honestly.} At $t=0.20$, $6.76\,\%$ of
+CelebA frames are rejected. Were every one of them open, the echo would
+be the false-reject rate; but the corpus was photographed in the wild
+and some of those faces are genuinely asleep-eyed, so the measured
+$6.76\,\%$ is an \emph{upper bound} on the false-reject rate, not the
+false-reject rate itself, and the
+true false-reject rate is smaller. Until the unlabelled corpus is
+manually graded, the gate can quote detection on the closed side and
+\emph{only a cost bound} on the open side.
+\end{keybox}
+
+\subsection{The margin}
+
+Let $\mathrm{EAR}^{\text{cl}}$ and $\mathrm{EAR}^{\text{op}}$ be the
+random variables behind the two corpora. The band in
+Section~\ref{sec:eyes} is defensible exactly when
+\begin{equation}
+  \sup_{F_{\text{cl}}} t < \inf_{F_{\text{op}}} t,
+  \qquad\text{but no gap was measured here.}
+\end{equation}
+The closed corpus has $95$th percentile $0.116$ and $\max=0.308$; the
+unlabelled corpus has $5$th percentile $0.177$ and $\min=0.012$. Their
+percentile ranges \emph{cross}. A band placed anywhere between them
+trades a visible closed-side miss for an unseen open-side reject; the
+chart makes that trade visible, and no wording should make it invisible.
+
+\begin{warnbox}
+\textbf{The claim this study may not make.}
+\begin{enumerate}[nosep]
+  \item ``Accuracy of $X$\,\%'' over the union of the two corpora: the
+        unlabelled corpus has no eye-state ground truth.
+  \item A closed-side miss rate under any rounding that folds the
+        $0.18$--$0.25$ tail into ``noise'': those are $5$ of $400$ faces at
+        $t=0.20$, so the honest miss rate is $1.25\,\%$, and rounding it to
+        ``$0\,\%$'' would be a false claim on five faces.
+  \item Anything resting on a single image: the $0.20$--$0.25$ band holds
+        four images, and one of them is more than half of the residual
+        mass.
+\end{enumerate}
+\end{warnbox}
+
+\begin{warnbox}
+\textbf{Scope.} The numbers above are from \emph{still JPEG frames},
+mostly \coden{178}$~\times$~\coden{218}~px crops or similar. The webcam path
+is live, motion-blurred, and polled every $900$~ms. Neither distribution
+transfers to the camera for free; a camera-side acceptance must be
+measured again on camera frames, not on these images.
+\end{warnbox}
+% ======================================================================
+% 8. Live webcam path
+% ======================================================================
+\section{The Live Webcam Path}
+\label{sec:webcam}
+
+\subsection{One click, one stream}
+
+The earlier page sent a single frame per click. That made enrollment a
+matter of timing luck: the operator had to press the button exactly on a
+still, open-eyed frame. The current page opens the camera once, then
+posts a frame on a timer:
+
+\begin{equation}
+  \mathrm{CAM\_POLL\_MS} = 900\ \text{ms},
+\end{equation}
+while three guards keep the loop from turning into feedback:
+
+\begin{enumerate}
+  \item \coden{camBusy} -- a frame is in flight, so the next tick is
+        skipped, not queued. On a two-core host a queue would only build
+        latency.
+  \item \coden{lastDataUrl} -- the canvas encoded the same frame as last
+        time (camera asleep, unchanged scene), so nothing is posted.
+  \item \emph{black-frame hold} -- the first polls after the stream opens
+        return a black canvas because the sensor has not warmed up; those
+        frames are not posted.
+\end{enumerate}
+
+The stream stops on the second press, on page unload, and on the first
+error. A failed frame never leaves a polling interval running.
+
+\subsection{Data URL, not a second encoder}
+
+The camera path holds a base64 data URL in memory, while the upload path
+holds a \coden{Blob}. \coden{verify()} therefore accepts both: for a string
+it slices after the first comma, for a blob it reads the file. The
+failure this replaced was reported as
+
+\begin{lstlisting}
+FileReader.readAsDataURL: parameter 1 is not of type 'Blob'.
+\end{lstlisting}
+
+and was not a camera bug: the camera was correct; the consumer simply
+expected the upload's type. The fallback in \coden{showImage()} has the same
+shape -- a string is passed straight to \coden{img.src}, a blob becomes an
+object URL.
+
+\subsection{The overlay is drawn on the picture}
+
+The page draws the detector's box and its five keypoints onto a canvas
+that sits \emph{on} the displayed image. The coordinate space is
+
+\begin{equation}
+  \text{canvas px} = \text{CSS px} \times \mathrm{devicePixelRatio},
+\end{equation}
+so a canvas of size $w\times h$ CSS pixels is backed by
+$(w\cdot d)\times(h\cdot d)$ pixels while its style stays
+$w\times h$. Drawing in CSS units and multiplying the transform by $d$
+keeps a 2\,$\times$ screen and a 1\,$\times$ screen geometrically identical.
+The canvas was earlier absolutely positioned with no positioned ancestor,
+so it escaped the image box; \coden{\#boxStage} now carries
+\coden{position: relative}, and the zoom/pan transform is applied to the
+image only, never to the canvas's coordinate space. The measured
+misalignment is $0$~px on all four edges.
+
+% ======================================================================
+% 9. Defects found and fixed
+% ======================================================================
+\section{Defects Found and Fixed}
+\label{sec:defects}
+
+Each item below was reproduced before it was fixed; the ``signature''
+column is the observation that would have identified it from the outside.
+
+\begin{table}[H]
+\centering
+\caption{Defects fixed on \coden{fix/p0-detection}.}
+\label{tab:defects}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\linewidth}{@{}l X X@{}}
+\toprule
+\textbf{Area} & \textbf{Signature} & \textbf{Cause and fix} \\
+\midrule
+Upload request & HTTP 400, \emph{Invalid JSON request} & Page posted \coden{FormData}; endpoint reads a JSON \coden{image}. Post JSON base64 instead. \\
+Banner         & always red                 & Page read \coden{acceptable\_for\_enrollment}; the field is \coden{accepted}. \\
+Gate table     & every row ``N/A''          & API did not return \coden{checks}; added to the response. \\
+\coden{exposure} & green on relative dark     & A missing brightness counted as passing. Missing is a skip, not a pass. \\
+Overlay        & box beside the image       & Canvas had no positioned ancestor; \coden{\#boxStage} made \coden{absolute}/\coden{relative} box. \\
+Camera         & \emph{not of type 'Blob'}   & \coden{verify()} assumed a Blob; camera holds a data URL. Accept both types. \\
+Camera (HTTP)  & 500 under concurrency      & \coden{setInputSize} + \coden{detect} raced on one stateful session. Both now under \coden{\_DETECTOR\_LOCK}. \\
+Eyes (dead)    & closed eyes passed         & \coden{app/quality.py} is imported by nothing; its edge ratio peaks on the closed lid and it was never in the pipeline. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{keybox}
+\textbf{The eye check was never wired in.} The page, the endpoint and the
+``eyes'' prose existed, but no call site reached the eye test: the live
+checks were \coden{one\_face}, \coden{face\_size}, \coden{detection\_confidence},
+\coden{blur}, \coden{exposure}, \coden{head\_pose}, \coden{landmarks\_inside}
+and \coden{landmark\_spacing}. Painting both eyes black on the test
+portrait returned \coden{accepted: true}. The diagnosis is therefore a
+\emph{missing call site}, not a mistuned threshold; no value of a cutoff
+would have changed the result.
+\end{keybox}
+
+\subsection{The concurrency race, in detail}
+
+YuNet's \coden{FaceDetectorYN} keeps the input size of the last call as
+session state in the C++ object. With this code,
+
+\begin{lstlisting}
+detector.setInputSize(DET_SIZE)   # writes to the session
+faces = detector.detect(...)      # reads the session's size
+\end{lstlisting}
+
+two worker threads can interleave as
+\textbf{A set} $\to$ \textbf{B set} $\to$ \textbf{A detect}, and A
+decodes B's size. The observed rate on four uvicorn workers with eight
+parallel $1280\times720$ frames was four or five of eight requests
+failing with \texttt{500 analysis\_failed}. Because the decode step is
+the expensive one, it stayed outside the lock; only the
+\coden{setInputSize} and \coden{detect}
+pair moved inside it. Result: $8/8$ then $3\times8/8 = 24/24$ successful,
+and the serialised detection is per request, so a single face per frame
+adds no visible latency.
+% ======================================================================
+% 10. What is not claimed + 11. reproduction
+% ======================================================================
+\section{What This Study Does Not Claim}
+\label{sec:limits}
+
+\begin{warnbox}
+\textbf{Claims that a reader may want and that the evidence above does not
+support.}
+\begin{itemize}
+  \item \emph{``The eye gate is $X\,\%$ accurate.''} The labelled corpus
+        carries only the closed label. Accuracy over the union would
+        repeat the packaging error of Section~\ref{sec:evidence}.
+  \item \emph{``The CelebA pass rate is the open-eye acceptance rate.''}
+        CelebA has no eye-state column, and an unknown share of its
+        faces are genuinely not open-eyed, so the pass rate bounds the
+        false-reject rate \emph{from below}, not from above.
+  \item \emph{``The still-frame calibration transfers to the webcam.''}
+        These corpora are small still crops; the live path is full-frame,
+        motion-blurred, and polled at $900$~ms. It must be measured on camera
+        frames.
+  \item \emph{``Eyes closed at any angle.''} Under a strong yaw the
+        ratio rises (Section~\ref{sec:eyes}); profile faces are outside
+        the contract of this gate and the \coden{head\_pose} check is
+        what refuses them.
+\end{itemize}
+\end{warnbox}
+
+\begin{keybox}
+\textbf{Current posture before the open-side grading.} The gate rejection it
+emits is correct on the closed side ($98.75\,\%$ at $0.18$ on real CEW
+faces) but its false-reject cost on the open side is only
+\emph{bounded}. That is enough to ship a narrow, conservative gate that
+holds rather than offends; it is not enough to print ``accuracy''
+in a product page.
+\end{keybox}
+
+% ======================================================================
+% 12. Reproducing the numbers
+% ======================================================================
+\section{Reproduction}
+\label{sec:repro}
+
+The two scripts under \coden{bench/} are the whole pipeline behind
+Section~\ref{sec:evidence}. They are deliberately small and have no
+hidden state.
+
+\begin{lstlisting}[language=bash]
+# 1. One row per image, both corpora, every gate decision recorded.
+python bench/eye_bench.py \
+    --out ~/.hermes/cache/scratch/celeba/eye_rows.jsonl
+
+# 2. The percentiles behind the tables, read back from (1).
+python bench/eye_stats.py \
+    ~/.hermes/cache/scratch/celeba/eye_rows.jsonl
+\end{lstlisting}
+
+A row looks like this -- the corpus field is what keeps the two questions
+apart downstream:
+
+\begin{lstlisting}[language=Python]
+{"corpus": "cew_subset", "source": "eyes_001", "row": 0,
+ "label": "closed", "sha256": "9f0c...", "height": 218, "width": 178,
+ "eyes_ok": false, "measurable": true,
+ "reason": "Eyes appear closed.", "ear_l": 0.041, "ear_r": 0.038,
+ "corner_px": 33.2, "ear": 0.038}
+\end{lstlisting}
+
+\begin{keybox}
+\textbf{The row is a measurement, not a verdict carrier.}   The gate decision is stored \emph{alongside} the number
+  (\coden{ear\_l}, \coden{ear\_r}) and the corner distance, so a
+  threshold can be re-chosen later without re-running the landmarker.
+  Re-deriving a table from stored \coden{eye\_rows.jsonl} is a one-line
+  numpy call; re-running the model is two minutes of CPU.
+\end{keybox}
+
+\begin{warnbox}
+\textbf{Determinism caveat.} MediaPipe is not bit-reproducible across
+its own versions, and the rows carry the model's SHA-256
+(\coden{64184e22\ldots}) for that reason. A free-floating percentile
+does not move much under a patch bump; a threshold placed \emph{inside}
+a dense band (which is exactly where $0.18$ and $0.20$ sit) does.
+\end{warnbox}
+
+\section*{Appendix A: Threshold trade-off, in one table}
+\addcontentsline{toc}{section}{Appendix A: Threshold trade-off}
+
+\begin{table}[H]
+\centering
+\caption{The shipped operating point $t=0.18$ against its neighbours.}
+\label{tab:appendix}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabularx}{\linewidth}{@{}r r r X@{}}
+\toprule
+$t$ & CEW closed rejected & CelebA rejected & Direction of the move \\
+\midrule
+0.12 & 95.25\,\% & 2.10\,\%  & catches $1$ closed in $21$; large leniency \\
+0.15 & 97.50\,\% & 3.64\,\%  & the balanced point \\
+\textbf{0.18} & \textbf{98.75\,\%} & \textbf{5.28\,\%} & \textbf{shipped: claims more, costs roughly $+45\,\%$ rejections} \\
+0.20 & 99.00\,\% & 6.76\,\%  & $+1$ face of $400$, $+28\,\%$ cost \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\noindent
+The last column is the honest way to read the third: between $0.15$ and
+$0.18$ the gate buys one closed face in $400$ ($97.50 \to 98.75$) and
+pays roughly a quarter more in rejects ($3.64 \to 5.28$, i.e.\
+$+45\,\%$ on the count of rejections). That is a small buy for a
+visible price; it must be sold as such, not as ``improved accuracy.''
+
+\end{document}
